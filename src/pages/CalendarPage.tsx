@@ -42,6 +42,7 @@ export default function CalendarPage() {
   const { user } = useAuth();
   const { t } = useTranslation();
   const [selectedLesson, setSelectedLesson] = useState<Lesson | null>(null);
+  const [selectedLessonDate, setSelectedLessonDate] = useState<string>(() => format(new Date(), "yyyy-MM-dd"));
   const [modalOpen, setModalOpen] = useState(false);
   const [viewMode, _setViewMode] = useState<ViewMode>(() => {
     try { const v = localStorage.getItem("today_cal_viewMode"); if (v === "day" || v === "week" || v === "month") return v; } catch {} return "day";
@@ -255,8 +256,9 @@ export default function CalendarPage() {
   const getLessonForGroupSlot = (groupId: number, timeSlotStart: string) =>
     lessons.find((l) => l.group_id === groupId && l.time_slot === timeSlotStart);
 
-  const handleCellClick = (lesson: Lesson) => {
+  const handleCellClick = (lesson: Lesson, dateStr?: string) => {
     setSelectedLesson(lesson);
+    setSelectedLessonDate(dateStr || format(currentDate, "yyyy-MM-dd"));
     setModalOpen(true);
   };
 
@@ -832,7 +834,7 @@ export default function CalendarPage() {
                   {dayLessons.slice(0, 3).map((lesson) => (
                     <button
                       key={lesson.id + dateStr}
-                      onClick={() => handleCellClick(lesson)}
+                      onClick={() => handleCellClick(lesson, dateStr)}
                       className={`relative w-full text-left p-1.5 rounded border border-l-4 ${getGroupColor(lesson.group_id)} border-primary/15 bg-primary/8 text-[11px] hover:bg-primary/15 transition-colors ${isLessonMarked(lesson, dateStr) ? "ring-2 ring-primary/40" : ""}`}
                     >
                       {isLessonMarked(lesson, dateStr) && (
@@ -885,7 +887,7 @@ export default function CalendarPage() {
                   {dayLessons.slice(0, 2).map((lesson) => (
                     <button
                       key={lesson.id + dateStr}
-                      onClick={() => handleCellClick(lesson)}
+                      onClick={() => handleCellClick(lesson, dateStr)}
                       className={`relative mt-1 w-full text-left p-1 rounded border-l-2 ${getGroupColor(lesson.group_id).replace('border-l-', 'border-l-')} bg-primary/5 text-[10px] truncate hover:bg-primary/10 transition-colors ${isLessonMarked(lesson, dateStr) ? "ring-1 ring-primary/40" : ""}`}
                     >
                       {isLessonMarked(lesson, dateStr) && (
@@ -1062,7 +1064,7 @@ export default function CalendarPage() {
         lesson={selectedLesson}
         open={modalOpen}
         onOpenChange={setModalOpen}
-        date={format(currentDate, "yyyy-MM-dd")}
+        date={selectedLessonDate}
         onSaved={handleAttendanceSaved}
       />
 
