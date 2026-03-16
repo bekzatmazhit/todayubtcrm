@@ -667,6 +667,35 @@ app.post("/api/attendance", (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// Lessons that have at least one attendance record in a date range
+// Returns: [{ schedule_id, date }]
+app.get("/api/attendance/marked-lessons", (req, res) => {
+  try {
+    const { from, to, teacher_id } = req.query;
+    if (!from || !to) return res.status(400).json({ error: "from and to required" });
+
+    const params = [from, to];
+    let teacherClause = "";
+    if (teacher_id) {
+      teacherClause = " AND sch.teacher_id = ?";
+      params.push(parseInt(teacher_id));
+    }
+
+    const rows = db.prepare(`
+      SELECT DISTINCT l.schedule_id, l.date
+      FROM lessons l
+      JOIN attendance a ON a.lesson_id = l.id
+      JOIN schedule sch ON sch.id = l.schedule_id
+      WHERE l.date BETWEEN ? AND ?${teacherClause}
+      ORDER BY l.date
+    `).all(...params);
+
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ====================== AD-HOC LESSONS ======================
 
 app.get("/api/adhoc-lessons", (req, res) => {

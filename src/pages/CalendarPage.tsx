@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { loadLessons, saveLessons } from "@/lib/storage";
 import { Lesson } from "@/data/mockSchedule";
-import { fetchLessons, fetchTasks, fetchTimeSlots, updateTask, fetchNotes, createNote as createNoteAPI, deleteNoteById, fetchAdhocLessons, createAdhocLesson, deleteAdhocLesson, updateAdhocLessonAttendance, fetchStudents, fetchUsers, fetchSubjects } from "@/lib/api";
+import { fetchLessons, fetchTasks, fetchTimeSlots, updateTask, fetchNotes, createNote as createNoteAPI, deleteNoteById, fetchAdhocLessons, createAdhocLesson, deleteAdhocLesson, updateAdhocLessonAttendance, fetchStudents, fetchUsers, fetchSubjects, fetchMarkedLessons } from "@/lib/api";
 import { ClassManagementModal } from "@/components/ClassManagementModal";
 import ScheduleConstructor from "@/components/ScheduleConstructor";
 import { useAuth } from "@/contexts/AuthContext";
@@ -53,6 +53,8 @@ export default function CalendarPage() {
   
   const [allLessons, setAllLessons] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const [markedLessonMap, setMarkedLessonMap] = useState<Record<string, true>>({});
 
   const [TIME_SLOTS, setTIME_SLOTS] = useState<string[]>([]);
   const [ROOMS, setROOMS] = useState<string[]>([]);
@@ -293,6 +295,48 @@ export default function CalendarPage() {
     }
     return days;
   }, [currentDate]);
+
+  const getScheduleIdFromLessonId = (lessonId: string) => {
+    const match = lessonId.match(/lesson-(\d+)/);
+    return match ? parseInt(match[1]) : null;
+  };
+
+  const isLessonMarked = (lesson: any, dateStr: string) => {
+    const scheduleId = getScheduleIdFromLessonId(String(lesson?.id || ""));
+    if (!scheduleId) return false;
+    return Boolean(markedLessonMap[`${scheduleId}|${dateStr}`]);
+  };
+
+  const handleAttendanceSaved = useCallback((info: { schedule_id: number | null; date: string }) => {
+    if (!info.schedule_id) return;
+    setMarkedLessonMap((prev) => ({ ...prev, [`${info.schedule_id}|${info.date}`]: true }));
+  }, []);
+
+  // Load which lessons are already "marked" (attendance saved) for visible date range
+  useEffect(() => {
+    if (viewMode === "report") return;
+    const from = viewMode === "day"
+      ? format(currentDate, "yyyy-MM-dd")
+      : viewMode === "week"
+        ? format(weekDays[0], "yyyy-MM-dd")
+        : format(monthDays[0], "yyyy-MM-dd");
+    const to = viewMode === "day"
+      ? format(currentDate, "yyyy-MM-dd")
+      : viewMode === "week"
+        ? format(weekDays[6], "yyyy-MM-dd")
+        : format(monthDays[monthDays.length - 1], "yyyy-MM-dd");
+
+    const teacherId = user?.role === "teacher" ? user.id : undefined;
+
+    (async () => {
+      const rows = await fetchMarkedLessons({ from, to, teacherId });
+      const next: Record<string, true> = {};
+      for (const r of rows as any[]) {
+        if (r?.schedule_id && r?.date) next[`${r.schedule_id}|${r.date}`] = true;
+      }
+      setMarkedLessonMap(next);
+    })();
+  }, [viewMode, currentDate, weekDays, monthDays, user?.id, user?.role]);
 
   const getNotesForDate = (date: string) => notes.filter((n) => n.date === date);
 
@@ -630,8 +674,11 @@ export default function CalendarPage() {
                             {lesson ? (
                               <button
                                 onClick={() => handleCellClick(lesson)}
-                                className={`w-full text-left p-2.5 rounded-lg bg-primary/8 hover:bg-primary/15 border border-l-4 ${getGroupColor(lesson.group_id)} border-primary/20 transition-all hover:shadow-md cursor-pointer`}
+                                className={`relative w-full text-left p-2.5 rounded-lg bg-primary/8 hover:bg-primary/15 border border-l-4 ${getGroupColor(lesson.group_id)} border-primary/20 transition-all hover:shadow-md cursor-pointer ${isLessonMarked(lesson, format(currentDate, "yyyy-MM-dd")) ? "ring-2 ring-primary/40" : ""}`}
                               >
+                                {isLessonMarked(lesson, format(currentDate, "yyyy-MM-dd")) && (
+                                  <CheckCircle2 className="h-4 w-4 text-primary absolute top-2 right-2" />
+                                )}
                                 <p className="text-xs font-semibold text-primary truncate">{lesson.group_name}</p>
                                 <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{lesson.subject}</p>
                               </button>
@@ -674,8 +721,11 @@ export default function CalendarPage() {
                             {lesson ? (
                               <button
                                 onClick={() => handleCellClick(lesson)}
-                                className={`w-full text-left p-2.5 rounded-lg bg-primary/8 hover:bg-primary/15 border border-l-4 ${getGroupColor(lesson.group_id)} border-primary/20 transition-all hover:shadow-md cursor-pointer`}
+                                className={`relative w-full text-left p-2.5 rounded-lg bg-primary/8 hover:bg-primary/15 border border-l-4 ${getGroupColor(lesson.group_id)} border-primary/20 transition-all hover:shadow-md cursor-pointer ${isLessonMarked(lesson, format(currentDate, "yyyy-MM-dd")) ? "ring-2 ring-primary/40" : ""}`}
                               >
+                                {isLessonMarked(lesson, format(currentDate, "yyyy-MM-dd")) && (
+                                  <CheckCircle2 className="h-4 w-4 text-primary absolute top-2 right-2" />
+                                )}
                                 <p className="text-xs font-semibold text-primary truncate">{lesson.subject}</p>
                                 <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{lesson.teacher_name}</p>
                                 <p className="text-[10px] text-muted-foreground/70 mt-0.5 truncate">{lesson.room}</p>
@@ -721,8 +771,11 @@ export default function CalendarPage() {
                             {lesson ? (
                               <button
                                 onClick={() => handleCellClick(lesson)}
-                                className={`w-full text-left p-2.5 rounded-lg bg-primary/8 hover:bg-primary/15 border border-l-4 ${getGroupColor(lesson.group_id)} border-primary/20 transition-all hover:shadow-md cursor-pointer`}
+                                className={`relative w-full text-left p-2.5 rounded-lg bg-primary/8 hover:bg-primary/15 border border-l-4 ${getGroupColor(lesson.group_id)} border-primary/20 transition-all hover:shadow-md cursor-pointer ${isLessonMarked(lesson, format(currentDate, "yyyy-MM-dd")) ? "ring-2 ring-primary/40" : ""}`}
                               >
+                                {isLessonMarked(lesson, format(currentDate, "yyyy-MM-dd")) && (
+                                  <CheckCircle2 className="h-4 w-4 text-primary absolute top-2 right-2" />
+                                )}
                                 <p className="text-xs font-semibold text-primary truncate">{lesson.group_name}</p>
                                 <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{lesson.subject}</p>
                                 <p className="text-[10px] text-muted-foreground/70 mt-0.5 truncate">{lesson.teacher_name}</p>
@@ -780,8 +833,11 @@ export default function CalendarPage() {
                     <button
                       key={lesson.id + dateStr}
                       onClick={() => handleCellClick(lesson)}
-                      className={`w-full text-left p-1.5 rounded border border-l-4 ${getGroupColor(lesson.group_id)} border-primary/15 bg-primary/8 text-[11px] hover:bg-primary/15 transition-colors`}
+                      className={`relative w-full text-left p-1.5 rounded border border-l-4 ${getGroupColor(lesson.group_id)} border-primary/15 bg-primary/8 text-[11px] hover:bg-primary/15 transition-colors ${isLessonMarked(lesson, dateStr) ? "ring-2 ring-primary/40" : ""}`}
                     >
+                      {isLessonMarked(lesson, dateStr) && (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-primary absolute top-1 right-1" />
+                      )}
                       <p className="font-medium text-primary truncate">{lesson.group_name}</p>
                       <p className="text-muted-foreground truncate">{lesson.subject}</p>
                     </button>
@@ -830,8 +886,11 @@ export default function CalendarPage() {
                     <button
                       key={lesson.id + dateStr}
                       onClick={() => handleCellClick(lesson)}
-                      className={`mt-1 w-full text-left p-1 rounded border-l-2 ${getGroupColor(lesson.group_id).replace('border-l-', 'border-l-')} bg-primary/5 text-[10px] truncate hover:bg-primary/10 transition-colors`}
+                      className={`relative mt-1 w-full text-left p-1 rounded border-l-2 ${getGroupColor(lesson.group_id).replace('border-l-', 'border-l-')} bg-primary/5 text-[10px] truncate hover:bg-primary/10 transition-colors ${isLessonMarked(lesson, dateStr) ? "ring-1 ring-primary/40" : ""}`}
                     >
+                      {isLessonMarked(lesson, dateStr) && (
+                        <CheckCircle2 className="h-3 w-3 text-primary absolute top-1 right-1" />
+                      )}
                       <span className="font-medium text-primary">{lesson.group_name}</span>
                       <span className="text-muted-foreground ml-1">{lesson.subject}</span>
                     </button>
@@ -999,7 +1058,13 @@ export default function CalendarPage() {
         </DialogContent>
       </Dialog>
 
-      <ClassManagementModal lesson={selectedLesson} open={modalOpen} onOpenChange={setModalOpen} date={format(currentDate, "yyyy-MM-dd")} />
+      <ClassManagementModal
+        lesson={selectedLesson}
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        date={format(currentDate, "yyyy-MM-dd")}
+        onSaved={handleAttendanceSaved}
+      />
 
       {/* Ad-hoc lesson creation modal */}
       <Dialog open={adhocModalOpen} onOpenChange={setAdhocModalOpen}>

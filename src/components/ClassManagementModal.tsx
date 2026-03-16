@@ -15,9 +15,10 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   date?: string; // YYYY-MM-DD
+  onSaved?: (info: { schedule_id: number | null; date: string }) => void;
 }
 
-export function ClassManagementModal({ lesson, open, onOpenChange, date }: Props) {
+export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved }: Props) {
   const [students, setStudents] = useState<Student[]>([]);
   const [saving, setSaving] = useState(false);
   const { t } = useTranslation();
@@ -50,13 +51,14 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date }: Props
     if (!lesson) return;
     setSaving(true);
     const scheduleId = getScheduleId();
+    const dateStr = date || new Date().toISOString().slice(0, 10);
     try {
       const promises = students.map((student) => {
         const studentId = getStudentId(student.id);
         if (!studentId) return Promise.resolve(null);
         return updateAttendance(studentId, 0, {
           schedule_id: scheduleId,
-          date: date || new Date().toISOString().slice(0, 10),
+          date: dateStr,
           status: student.attendance,
           lateness: student.lateness,
           homework: student.homework,
@@ -65,6 +67,7 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date }: Props
       });
       await Promise.all(promises);
       toast.success(t("Attendance saved successfully!"));
+      onSaved?.({ schedule_id: scheduleId, date: dateStr });
       onOpenChange(false);
     } catch (error) {
       console.error("Error saving attendance:", error);

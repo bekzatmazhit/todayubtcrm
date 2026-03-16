@@ -165,6 +165,23 @@ export async function fetchLessonsForTeacher(teacherId: string) {
   return fetchLessons(teacherId);
 }
 
+// ====================== ATTENDANCE (helpers) ======================
+
+export async function fetchMarkedLessons(params: { from: string; to: string; teacherId?: string | number }) {
+  try {
+    const search = new URLSearchParams();
+    search.set("from", params.from);
+    search.set("to", params.to);
+    if (params.teacherId !== undefined) search.set("teacher_id", String(params.teacherId));
+    const res = await fetch(`${API_BASE}/attendance/marked-lessons?${search.toString()}`, defaultOptions);
+    if (!res.ok) throw new Error("Failed to fetch marked lessons");
+    return await res.json();
+  } catch (error) {
+    console.error("Error fetching marked lessons:", error);
+    return [];
+  }
+}
+
 // ====================== AD-HOC LESSONS ======================
 
 export async function fetchAdhocLessons(date?: string, teacherId?: string) {
