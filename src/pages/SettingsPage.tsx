@@ -421,8 +421,11 @@ export default function SettingsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="default">Default</SelectItem>
-                <SelectItem value="primary-accent">Primary Accent</SelectItem>
-                <SelectItem value="neutral-accent">Neutral Accent</SelectItem>
+                <SelectItem value="vibrant">Яркий</SelectItem>
+                <SelectItem value="primary-accent">Акцент: основной</SelectItem>
+                <SelectItem value="neutral-accent">Акцент: нейтральный</SelectItem>
+                <SelectItem value="contrast">Контрастный</SelectItem>
+                <SelectItem value="rounded">Более круглый</SelectItem>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">Меняет акцентные подсветки и выделения.</p>

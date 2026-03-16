@@ -1,11 +1,20 @@
-export type CrmStyle = "default" | "primary-accent" | "neutral-accent";
+export type CrmStyle =
+  | "default"
+  | "vibrant"
+  | "primary-accent"
+  | "neutral-accent"
+  | "contrast"
+  | "rounded";
 
 const STORAGE_KEY = "today_crm_style";
 
 const CLASS_BY_STYLE: Record<CrmStyle, string | null> = {
   default: null,
+  vibrant: "crm-style-vibrant",
   "primary-accent": "crm-style-primary-accent",
   "neutral-accent": "crm-style-neutral-accent",
+  contrast: "crm-style-contrast",
+  rounded: "crm-style-rounded",
 };
 
 const ALL_STYLE_CLASSES = Object.values(CLASS_BY_STYLE).filter(Boolean) as string[];
@@ -13,7 +22,16 @@ const ALL_STYLE_CLASSES = Object.values(CLASS_BY_STYLE).filter(Boolean) as strin
 export function getCrmStyle(): CrmStyle {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw === "default" || raw === "primary-accent" || raw === "neutral-accent") return raw;
+    if (
+      raw === "default" ||
+      raw === "vibrant" ||
+      raw === "primary-accent" ||
+      raw === "neutral-accent" ||
+      raw === "contrast" ||
+      raw === "rounded"
+    ) {
+      return raw;
+    }
   } catch {
     // ignore
   }
