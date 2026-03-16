@@ -12,6 +12,7 @@ import { fetchUser, updateUser, uploadAvatar, deleteAvatar } from "@/lib/api";
 import { UserAvatar } from "@/components/UserAvatar";
 import { formatPhone } from "@/lib/utils";
 import { applyCrmBackground, getCrmBackground, setCrmBackground, type CrmBackground } from "@/lib/background";
+import { applyCrmStyle, getCrmStyle, setCrmStyle, type CrmStyle } from "@/lib/style";
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Администратор",
@@ -26,6 +27,7 @@ export default function SettingsPage() {
   const [surname, setSurname] = useState("");
   const [phone, setPhone] = useState("");
   const [background, setBackground] = useState<CrmBackground>(() => getCrmBackground());
+  const [style, setStyle] = useState<CrmStyle>(() => getCrmStyle());
   const [saving, setSaving] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
@@ -56,6 +58,10 @@ export default function SettingsPage() {
   useEffect(() => {
     applyCrmBackground(background);
   }, [background]);
+
+  useEffect(() => {
+    applyCrmStyle(style);
+  }, [style]);
 
   const handleSaveProfile = async () => {
     if (!user || !name.trim() || !surname.trim()) {
@@ -394,6 +400,32 @@ export default function SettingsPage() {
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">Сохраняется на этом устройстве и применяется сразу.</p>
+          </div>
+
+          <Separator />
+
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground uppercase tracking-wider">Стиль</Label>
+            <Select
+              value={style}
+              onValueChange={(value) => {
+                const next = value as CrmStyle;
+                setStyle(next);
+                setCrmStyle(next);
+                applyCrmStyle(next);
+                toast.success("Стиль обновлён");
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Выберите стиль" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">Default</SelectItem>
+                <SelectItem value="primary-accent">Primary Accent</SelectItem>
+                <SelectItem value="neutral-accent">Neutral Accent</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Меняет акцентные подсветки и выделения.</p>
           </div>
         </CardContent>
       </Card>
