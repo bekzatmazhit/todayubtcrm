@@ -1,5 +1,7 @@
-// Базовый URL API: из переменной окружения в проде, иначе локальный сервер
-const API_BASE = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:3001/api`;
+// Базовый URL API:
+// - в проде на Netlify удобнее ходить на same-origin `/api` (Netlify proxy/redirect)
+// - при необходимости можно переопределить через VITE_API_URL
+const API_BASE = (import.meta as any).env?.VITE_API_URL || "/api";
 
 // Для всех запросов по умолчанию не передаём credentials
 const defaultOptions: RequestInit = {};

@@ -15,6 +15,13 @@ export default defineConfig(({ mode }) => ({
       port: 8080,
       overlay: false,
     },
+    // Dev-прокси: чтобы фронт обращался к /api без CORS
+    proxy: {
+      "/api": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
+    },
   },
   plugins: [react()],
   resolve: {
