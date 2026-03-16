@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useState, useEffect, useMemo } from "react";
-import { fetchStudents, fetchGroups, fetchStudent, updateStudent, fetchTeacherFeedbackByStudent, fetchParentFeedback } from "@/lib/api";
+import { fetchStudents, fetchGroups, fetchStudent, updateStudent, fetchTeacherFeedbackByStudent, fetchParentFeedback, fetchLessonCommentsByStudent } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatPhone } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -73,10 +73,22 @@ export default function StudentsPage() {
   const [sortAsc, setSortAsc] = useState(true);
   const [teacherFeedback, setTeacherFeedback] = useState<any[]>([]);
   const [parentFeedback, setParentFeedback] = useState<any[]>([]);
+  const [lessonComments, setLessonComments] = useState<any[]>([]);
   const [feedbackMonth, setFeedbackMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [editMode, setEditMode] = useState(false);
   const [editForm, setEditForm] = useState({ full_name: "", phone: "", parent_phone: "", parent_name: "" });
   const [saving, setSaving] = useState(false);
+
+  const getMonthRange = (month: string) => {
+    const [yStr, mStr] = month.split("-");
+    const y = Number(yStr);
+    const m = Number(mStr);
+    if (!y || !m) return null;
+    const from = `${month}-01`;
+    const lastDay = new Date(y, m, 0).getDate();
+    const to = `${month}-${String(lastDay).padStart(2, "0")}`;
+    return { from, to };
+  };
 
   const curatorGroupIds = useMemo(() => {
     if (!user) return new Set<number>();
@@ -152,7 +164,9 @@ export default function StudentsPage() {
     setStudentDetailsLoading(true);
     setTeacherFeedback([]);
     setParentFeedback([]);
+    setLessonComments([]);
     try {
+      const range = getMonthRange(feedbackMonth);
       const [details, tf, pf] = await Promise.all([
         fetchStudent(student.id.toString()),
         fetchTeacherFeedbackByStudent(student.id, feedbackMonth),
@@ -161,6 +175,11 @@ export default function StudentsPage() {
       setSelectedStudent(details);
       setTeacherFeedback(tf || []);
       setParentFeedback(pf || []);
+
+      if (range) {
+        const lc = await fetchLessonCommentsByStudent({ studentId: student.id, from: range.from, to: range.to, limit: 100 });
+        setLessonComments(lc || []);
+      }
     } catch (error) {
       console.error("Error loading student details:", error);
       setSelectedStudent(student);
@@ -216,9 +235,15 @@ export default function StudentsPage() {
 
   // Reload feedback when month changes
   useEffect(() => {
-    if (selectedStudent && modalOpen) {
-      fetchTeacherFeedbackByStudent(selectedStudent.id, feedbackMonth).then(setTeacherFeedback);
+    if (!selectedStudent || !modalOpen) return;
+    fetchTeacherFeedbackByStudent(selectedStudent.id, feedbackMonth).then(setTeacherFeedback);
+
+    const range = getMonthRange(feedbackMonth);
+    if (!range) {
+      setLessonComments([]);
+      return;
     }
+    fetchLessonCommentsByStudent({ studentId: selectedStudent.id, from: range.from, to: range.to, limit: 100 }).then(setLessonComments);
   }, [feedbackMonth]);
 
   const MONTH_OPTIONS = [
@@ -611,7 +636,7 @@ export default function StudentsPage() {
                 <TabsTrigger value="info">Информация</TabsTrigger>
                 <TabsTrigger value="attendance">Посещаемость</TabsTrigger>
                 <TabsTrigger value="ent">ЕНТ</TabsTrigger>
-                <TabsTrigger value="reviews">Отзывы</TabsTrigger>
+                <TabsTrigger value="reviews">Комментарии</TabsTrigger>
               </TabsList>
 
               <TabsContent value="info" className="space-y-4 mt-4">
@@ -770,6 +795,32 @@ export default function StudentsPage() {
                     </SelectContent>
                   </Select>
                 </div>
+
+                {/* Lesson comments */}
+                {lessonComments.length > 0 ? (
+                  <div>
+                    <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+                      <MessageSquare className="h-4 w-4" />Комментарии в уроках
+                    </h4>
+                    <div className="space-y-2">
+                      {lessonComments.map((c: any, i: number) => (
+                        <div key={`${c.date}-${i}`} className="p-3 border rounded-lg">
+                          <div className="flex flex-wrap items-center gap-2 mb-1">
+                            <span className="text-xs font-semibold text-muted-foreground">{c.date}</span>
+                            {c.teacher_name && <Badge variant="outline" className="text-[10px]">{c.teacher_name}</Badge>}
+                            {c.subject_name && <Badge variant="secondary" className="text-[10px]">{c.subject_name}</Badge>}
+                          </div>
+                          <p className="text-sm whitespace-pre-wrap">{c.comment}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-4 text-muted-foreground">
+                    <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                    <p className="text-sm">Нет комментариев в уроках за выбранный месяц</p>
+                  </div>
+                )}
 
                 {/* Teacher feedback */}
                 {teacherFeedback.length > 0 ? (
