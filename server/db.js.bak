@@ -1,0 +1,440 @@
+import Database from "better-sqlite3";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const dbPath = path.join(__dirname, "database.sqlite");
+
+function toLatin(str) {
+  // Simple Cyrillic to Latin transliteration
+  const map = {
+    а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'i', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sh', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
+    А: 'A', Б: 'B', В: 'V', Г: 'G', Д: 'D', Е: 'E', Ё: 'E', Ж: 'Zh', З: 'Z', И: 'I', Й: 'I', К: 'K', Л: 'L', М: 'M', Н: 'N', О: 'O', П: 'P', Р: 'R', С: 'S', Т: 'T', У: 'U', Ф: 'F', Х: 'H', Ц: 'Ts', Ч: 'Ch', Ш: 'Sh', Щ: 'Sh', Ъ: '', Ы: 'Y', Ь: '', Э: 'E', Ю: 'Yu', Я: 'Ya',
+    ' ': '', '’': '', "'": '', '"': '', '.': '', ',': '', '-': '', '_': ''
+  };
+  return str.split('').map(c => map[c] !== undefined ? map[c] : c).join('');
+}
+
+export const db = new Database(dbPath);
+
+export function initializeDatabase() {
+  // Enable foreign keys
+  db.pragma("foreign_keys = ON");
+
+  // Create tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS roles (
+      id INTEGER PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      surname TEXT NOT NULL,
+      phone TEXT,
+      email TEXT UNIQUE,
+      password TEXT,
+      role_id INTEGER NOT NULL,
+      FOREIGN KEY(role_id) REFERENCES roles(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS subjects (
+      id INTEGER PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS groups (
+      id INTEGER PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS schedule (
+      id INTEGER PRIMARY KEY,
+      group_id INTEGER NOT NULL,
+      subject_id INTEGER NOT NULL,
+      teacher_id INTEGER NOT NULL,
+      cycle TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
+      room_name TEXT NOT NULL,
+      FOREIGN KEY(group_id) REFERENCES groups(id),
+      FOREIGN KEY(subject_id) REFERENCES subjects(id),
+      FOREIGN KEY(teacher_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS lessons (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      schedule_id INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      group_id INTEGER NOT NULL,
+      subject_id INTEGER NOT NULL,
+      teacher_id INTEGER NOT NULL,
+      FOREIGN KEY(schedule_id) REFERENCES schedule(id),
+      FOREIGN KEY(group_id) REFERENCES groups(id),
+      FOREIGN KEY(subject_id) REFERENCES subjects(id),
+      FOREIGN KEY(teacher_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS students (
+      id INTEGER PRIMARY KEY,
+      full_name TEXT NOT NULL,
+      phone TEXT,
+      group_id INTEGER,
+      lesson_id INTEGER,
+      FOREIGN KEY(group_id) REFERENCES groups(id),
+      FOREIGN KEY(lesson_id) REFERENCES lessons(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS attendance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL,
+      lesson_id INTEGER NOT NULL,
+      status TEXT DEFAULT 'present',
+      lateness TEXT DEFAULT 'on_time',
+      homework TEXT DEFAULT 'done',
+      comment TEXT,
+      FOREIGN KEY(student_id) REFERENCES students(id),
+      FOREIGN KEY(lesson_id) REFERENCES lessons(id)
+    );
+  `);
+
+  // Insert default roles
+  const roles = [
+    { id: 1, name: "admin" },
+    { id: 2, name: "umo_head" },
+    { id: 3, name: "teacher" },
+  ];
+
+  const roleStmt = db.prepare("SELECT * FROM roles WHERE id = ?");
+  for (const role of roles) {
+    if (!roleStmt.get(role.id)) {
+      db.prepare("INSERT INTO roles (id, name) VALUES (?, ?)").run(role.id, role.name);
+    }
+  }
+
+  // Load users from CSV if not already loaded
+  const userCount = db.prepare("SELECT COUNT(*) as count FROM users").get().count;
+  console.log(`👥 Current users in DB: ${userCount}`);
+  
+  const csvPath = path.join(__dirname, "../database_today - users.csv");
+  console.log(`🔍 Looking for CSV at: ${csvPath}`);
+  console.log(`📄 CSV exists: ${fs.existsSync(csvPath)}`);
+  
+  if (userCount === 0) {
+    if (fs.existsSync(csvPath)) {
+      loadUsersFromCSV(csvPath);
+    } else {
+      console.warn("⚠️ CSV file not found!");
+    }
+  } else {
+    console.log("✅ Users already in DB, skipping CSV load");
+  }
+
+  // Load groups from CSV
+  const groupCount = db.prepare("SELECT COUNT(*) as count FROM groups").get().count;
+  console.log(`📊 Current groups in DB: ${groupCount}`);
+  
+  if (groupCount === 0) {
+    const groupsCsvPath = path.join(__dirname, "../database_today - groups .csv");
+    if (fs.existsSync(groupsCsvPath)) {
+      loadGroupsFromCSV(groupsCsvPath);
+    }
+  }
+
+  // Load subjects from CSV
+  const subjectCount = db.prepare("SELECT COUNT(*) as count FROM subjects").get().count;
+  console.log(`📚 Current subjects in DB: ${subjectCount}`);
+  
+  if (subjectCount === 0) {
+    const subjectsCsvPath = path.join(__dirname, "../database_today - subjects .csv");
+    if (fs.existsSync(subjectsCsvPath)) {
+      loadSubjectsFromCSV(subjectsCsvPath);
+    }
+  }
+
+  // Load students from CSV
+  const studentCount = db.prepare("SELECT COUNT(*) as count FROM students").get().count;
+  console.log(`👨‍🎓 Current students in DB: ${studentCount}`);
+  
+  if (studentCount === 0) {
+    const studentsCsvPath = path.join(__dirname, "../database_today - students .csv");
+    if (fs.existsSync(studentsCsvPath)) {
+      loadStudentsFromCSV(studentsCsvPath);
+    }
+  }
+
+  // Load schedule from CSV
+  const scheduleCount = db.prepare("SELECT COUNT(*) as count FROM schedule").get().count;
+  console.log(`📅 Current schedule entries in DB: ${scheduleCount}`);
+  
+  if (scheduleCount === 0) {
+    const scheduleCsvPath = path.join(__dirname, "../database_today - schedule .csv");
+    if (fs.existsSync(scheduleCsvPath)) {
+      loadScheduleFromCSV(scheduleCsvPath);
+    }
+  }
+
+  console.log("✅ Database initialized");
+  
+  // Generate emails for all users that don't have them or generate them fresh
+  const allUsers = db.prepare("SELECT id, name, surname FROM users").all();
+  if (allUsers.length > 0) {
+    const updateStmt = db.prepare("UPDATE users SET email = ? WHERE id = ?");
+    for (const user of allUsers) {
+      const name = toLatin((user.name || "").toString().trim().toLowerCase().replace(/\s+/g, '') || "user");
+      const surname = toLatin((user.surname || "").toString().trim().toLowerCase().replace(/\s+/g, '') || "today");
+      const email = `${name}.${surname}@today.edu`;
+      try {
+        updateStmt.run(email, user.id);
+      } catch (e) {
+        console.warn(`⚠️ Error updating email for user ${user.id}:`, e.message);
+      }
+    }
+    console.log(`✅ Generated/updated ${allUsers.length} user emails`);
+  }
+  
+  // Display login credentials
+  console.log("\n🔐 ===== LOGIN CREDENTIALS =====\n");
+  const displayUsers = db.prepare(`
+    SELECT u.id, u.name, u.surname, u.email, u.password, r.name as role
+    FROM users u
+    JOIN roles r ON u.role_id = r.id
+    ORDER BY u.id
+  `).all();
+  
+  displayUsers.forEach(user => {
+    console.log(`Email: ${user.email}`);
+    console.log(`Password: ${user.password}`);
+    console.log(`${user.name} ${user.surname} (${user.role})\n`);
+  });
+  console.log("================================\n");
+}
+
+function loadUsersFromCSV(csvPath) {
+  try {
+    console.log("📂 Loading CSV from:", csvPath);
+    const data = fs.readFileSync(csvPath, "utf-8");
+    const lines = data.split("\n");
+    const headers = lines[0].split(",").map((h) => h.trim());
+
+    console.log("📋 CSV Headers:", headers);
+
+    const idIdx = headers.indexOf("id");
+    const nameIdx = headers.indexOf("name");
+    const surnameIdx = headers.indexOf("surname");
+    const phoneIdx = headers.indexOf("phone");
+    const emailIdx = headers.indexOf("email");
+    const roleIdIdx = headers.indexOf("role_id");
+
+    const stmt = db.prepare(
+      "INSERT INTO users (id, name, surname, phone, email, password, role_id) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    );
+
+    let inserted = 0;
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      const cols = line.split(",");
+      try {
+        // Generate password from surname + id
+        const password = cols[surnameIdx]?.trim()?.toLowerCase() + (parseInt(cols[idIdx]?.trim()) || 0);
+        // Generate email if not provided
+        let email = cols[emailIdx]?.trim() || null;
+        if (!email) {
+          const name = cols[nameIdx]?.trim()?.toLowerCase() || "user";
+          const surname = cols[surnameIdx]?.trim()?.toLowerCase() || "today";
+          email = `${name}.${surname}@today.edu`;
+        }
+        stmt.run(
+          parseInt(cols[idIdx]?.trim()),
+          cols[nameIdx]?.trim(),
+          cols[surnameIdx]?.trim(),
+          cols[phoneIdx]?.trim() || null,
+          email,
+          password,
+          parseInt(cols[roleIdIdx]?.trim())
+        );
+        inserted++;
+      } catch (e) {
+        console.warn(`⚠️ Error inserting row ${i}:`, e.message);
+      }
+    }
+
+    console.log(`✅ Inserted ${inserted} users from CSV`);
+  } catch (err) {
+    console.error("❌ Error loading CSV:", err.message);
+  }
+}
+
+function loadGroupsFromCSV(csvPath) {
+  try {
+    console.log("📂 Loading Groups from:", csvPath);
+    const data = fs.readFileSync(csvPath, "utf-8");
+    const lines = data.split("\n");
+    const headers = lines[0].split(",").map((h) => h.trim());
+
+    const idIdx = headers.indexOf("id");
+    const nameIdx = headers.indexOf("group_name");
+    const profileIdx = headers.indexOf("profile_id");
+    const curatorIdx = headers.indexOf("curator_id");
+
+    const stmt = db.prepare(
+      "INSERT INTO groups (id, name) VALUES (?, ?)"
+    );
+
+    let inserted = 0;
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      const cols = line.split(",");
+      try {
+        stmt.run(
+          parseInt(cols[idIdx]?.trim()),
+          cols[nameIdx]?.trim()
+        );
+        inserted++;
+      } catch (e) {
+        console.warn(`⚠️ Error inserting group row ${i}:`, e.message);
+      }
+    }
+
+    console.log(`✅ Inserted ${inserted} groups from CSV`);
+  } catch (err) {
+    console.error("❌ Error loading groups CSV:", err.message);
+  }
+}
+
+function loadSubjectsFromCSV(csvPath) {
+  try {
+    console.log("📂 Loading Subjects from:", csvPath);
+    const data = fs.readFileSync(csvPath, "utf-8");
+    const lines = data.split("\n");
+    const headers = lines[0].split(",").map((h) => h.trim());
+
+    const idIdx = headers.indexOf("Id");
+    const nameIdx = headers.indexOf("subject_name");
+
+    const stmt = db.prepare(
+      "INSERT INTO subjects (id, name) VALUES (?, ?)"
+    );
+
+    let inserted = 0;
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      const cols = line.split(",");
+      try {
+        stmt.run(
+          parseInt(cols[idIdx]?.trim()),
+          cols[nameIdx]?.trim()
+        );
+        inserted++;
+      } catch (e) {
+        console.warn(`⚠️ Error inserting subject row ${i}:`, e.message);
+      }
+    }
+
+    console.log(`✅ Inserted ${inserted} subjects from CSV`);
+  } catch (err) {
+    console.error("❌ Error loading subjects CSV:", err.message);
+  }
+}
+
+function loadStudentsFromCSV(csvPath) {
+  try {
+    console.log("📂 Loading Students from:", csvPath);
+    const data = fs.readFileSync(csvPath, "utf-8");
+    const lines = data.split("\n");
+    const headers = lines[0].split(",").map((h) => h.trim());
+
+    const idIdx = headers.indexOf("id");
+    const nameIdx = headers.indexOf("name");
+    const surnameIdx = headers.indexOf("surname");
+    const phoneIdx = headers.indexOf("phone");
+    const groupIdIdx = headers.indexOf("group_id");
+    const statusIdx = headers.indexOf("status");
+
+    const stmt = db.prepare(
+      "INSERT INTO students (id, full_name, phone, group_id) VALUES (?, ?, ?, ?)"
+    );
+
+    let inserted = 0;
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      const cols = line.split(",");
+      try {
+        const fullName = `${cols[nameIdx]?.trim()} ${cols[surnameIdx]?.trim()}`.trim();
+        stmt.run(
+          parseInt(cols[idIdx]?.trim()),
+          fullName,
+          cols[phoneIdx]?.trim() || null,
+          parseInt(cols[groupIdIdx]?.trim()) || null
+        );
+        inserted++;
+      } catch (e) {
+        console.warn(`⚠️ Error inserting student row ${i}:`, e.message);
+      }
+    }
+
+    console.log(`✅ Inserted ${inserted} students from CSV`);
+  } catch (err) {
+    console.error("❌ Error loading students CSV:", err.message);
+  }
+}
+
+function loadScheduleFromCSV(csvPath) {
+  try {
+    console.log("📂 Loading Schedule from:", csvPath);
+    const data = fs.readFileSync(csvPath, "utf-8");
+    const lines = data.split("\n");
+    const headers = lines[0].split(",").map((h) => h.trim());
+
+    const idIdx = headers.indexOf("id");
+    const groupIdIdx = headers.indexOf("group_id");
+    const subjectIdIdx = headers.indexOf("subject_id");
+    const teacherIdIdx = headers.indexOf("teacher_id");
+    const cycleIdx = headers.indexOf("cycle");
+    const startTimeIdx = headers.indexOf("start_time");
+    const endTimeIdx = headers.indexOf("end_time");
+    const roomNameIdx = headers.indexOf("room_name");
+
+    const stmt = db.prepare(`
+      INSERT INTO schedule (id, group_id, subject_id, teacher_id, cycle, start_time, end_time, room_name) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    let inserted = 0;
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      const cols = line.split(",");
+      try {
+        stmt.run(
+          parseInt(cols[idIdx]?.trim()),
+          parseInt(cols[groupIdIdx]?.trim()),
+          parseInt(cols[subjectIdIdx]?.trim()),
+          parseInt(cols[teacherIdIdx]?.trim()),
+          cols[cycleIdx]?.trim(),
+          cols[startTimeIdx]?.trim(),
+          cols[endTimeIdx]?.trim(),
+          cols[roomNameIdx]?.trim()
+        );
+        inserted++;
+      } catch (e) {
+        console.warn(`⚠️ Error inserting schedule row ${i}:`, e.message);
+      }
+    }
+
+    console.log(`✅ Inserted ${inserted} schedule entries from CSV`);
+  } catch (err) {
+    console.error("❌ Error loading schedule CSV:", err.message);
+  }
+}

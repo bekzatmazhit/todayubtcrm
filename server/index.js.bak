@@ -1,0 +1,398 @@
+import express from "express";
+import cors from "cors";
+import { initializeDatabase, db } from "./db.js";
+
+const app = express();
+const PORT = 3001;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Initialize database
+initializeDatabase();
+
+// Routes
+
+// Root endpoint
+app.get("/", (req, res) => {
+  res.json({
+    message: "Today CRM API Server",
+    version: "1.0.0",
+    endpoints: {
+      health: "/api/health",
+      users: "/api/users",
+      groups: "/api/groups",
+      students: "/api/students",
+      roles: "/api/roles",
+      lessons: "/api/lessons"
+    }
+  });
+});
+
+// Get all users
+app.get("/api/users", (req, res) => {
+  try {
+    console.log("📥 GET /api/users");
+    const query = `
+      SELECT u.id, u.name, u.surname, u.email, u.phone, r.name as role
+      FROM users u
+      JOIN roles r ON u.role_id = r.id
+      ORDER BY u.id
+    `;
+    const users = db.prepare(query).all();
+    console.log(`✅ Retrieved ${users.length} users`);
+    res.json(users);
+  } catch (error) {
+    console.error("❌ Error fetching users:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get user by ID
+app.get("/api/users/:id", (req, res) => {
+  try {
+    const user = db
+      .prepare(
+        `
+      SELECT u.id, u.name, u.surname, u.email, u.phone, r.name as role
+      FROM users u
+      JOIN roles r ON u.role_id = r.id
+      WHERE u.id = ?
+    `
+      )
+      .get(req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Login endpoint
+app.post("/api/login", (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password required" });
+    }
+
+    console.log(`📥 POST /api/login - Email: ${email}`);
+
+    const user = db
+      .prepare(
+        `
+      SELECT u.id, u.name, u.surname, u.email, u.phone, u.password, r.name as role
+      FROM users u
+      JOIN roles r ON u.role_id = r.id
+      WHERE u.email = ?
+    `
+      )
+      .get(email);
+
+    if (!user) {
+      console.log(`❌ User not found: ${email}`);
+      return res.status(401).json({ error: "Invalid email or password" });
+    }
+
+    if (user.password !== password) {
+      console.log(`❌ Wrong password for user: ${email}`);
+      return res.status(401).json({ error: "Invalid email or password" });
+    }
+
+    console.log(`✅ User logged in: ${email}`);
+    res.json({
+      id: user.id.toString(),
+      email: user.email,
+      full_name: `${user.name} ${user.surname}`,
+      role: user.role
+    });
+  } catch (error) {
+    console.error("❌ Error during login:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all lessons with students
+app.get("/api/lessons", (req, res) => {
+  try {
+    console.log("📥 GET /api/lessons");
+    const { teacher_id } = req.query;
+    
+    let query = `
+      SELECT s.id, s.group_id, s.subject_id, s.teacher_id,
+             s.cycle, s.start_time, s.end_time, s.room_name,
+             g.name as group_name, 
+             subj.name as subject_name,
+             u.name || ' ' || u.surname as teacher_name
+      FROM schedule s
+      LEFT JOIN groups g ON s.group_id = g.id
+      LEFT JOIN subjects subj ON s.subject_id = subj.id
+      LEFT JOIN users u ON s.teacher_id = u.id
+    `;
+
+    if (teacher_id) {
+      query += ` WHERE s.teacher_id = ${parseInt(teacher_id)}`;
+    }
+
+    query += ` ORDER BY s.start_time`;
+
+    const schedule = db.prepare(query).all();
+
+    // Get students for each group
+    const studentsByGroupStmt = db.prepare(`
+      SELECT id, full_name, group_id
+      FROM students
+      WHERE group_id = ?
+    `);
+
+    // Helper function to get dates for this week based on cycle
+    function generateLessonDates(cycle) {
+      const dates = [];
+      const today = new Date();
+      
+      // Generate dates for the past 2 weeks and next 8 weeks (total 10 weeks)
+      const startDate = new Date(today);
+      startDate.setDate(today.getDate() - 14); // 2 weeks ago
+      
+      const endDate = new Date(today);
+      endDate.setDate(today.getDate() + 56); // 8 weeks ahead
+      
+      // Map cycle to days (0=Sunday, 1=Monday, 2=Tuesday, etc)
+      let lessonDays = [];
+      if (cycle === "ПСП") {
+        lessonDays = [1, 3, 5]; // Monday, Wednesday, Friday
+      } else if (cycle === "ВЧС") {
+        lessonDays = [2, 4, 6]; // Tuesday, Thursday, Saturday
+      }
+      
+      // Generate all dates within the range that match the cycle
+      for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+        const dayOfWeek = d.getDay();
+        if (lessonDays.includes(dayOfWeek)) {
+          const dateStr = d.toISOString().split('T')[0];
+          dates.push(dateStr);
+        }
+      }
+      
+      return dates;
+    }
+
+    const result = schedule.map((lesson) => {
+      const dates = generateLessonDates(lesson.cycle);
+      return {
+        id: lesson.id,
+        group_id: lesson.group_id,
+        subject_id: lesson.subject_id,
+        teacher_id: lesson.teacher_id,
+        group_name: lesson.group_name,
+        subject_name: lesson.subject_name,
+        teacher_name: lesson.teacher_name,
+        cycle: lesson.cycle,
+        start_time: lesson.start_time,
+        end_time: lesson.end_time,
+        room_name: lesson.room_name,
+        dates: dates,
+        students: studentsByGroupStmt.all(lesson.group_id),
+      };
+    });
+
+    console.log(`✅ Retrieved ${result.length} schedule entries`);
+    res.json(result);
+  } catch (error) {
+    console.error("❌ Error fetching lessons:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+// Health check
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok" });
+});
+
+// Simple test endpoint - raw users
+app.get("/api/users-raw", (req, res) => {
+  try {
+    console.log("📥 GET /api/users-raw");
+    const users = db.prepare("SELECT * FROM users").all();
+    console.log(`✅ Retrieved ${users.length} users (raw)`);
+    res.json(users);
+  } catch (error) {
+    console.error("❌ Error fetching users (raw):", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Test roles
+app.get("/api/roles", (req, res) => {
+  try {
+    console.log("📥 GET /api/roles");
+    const roles = db.prepare("SELECT * FROM roles").all();
+    console.log(`✅ Retrieved ${roles.length} roles`);
+    res.json(roles);
+  } catch (error) {
+    console.error("❌ Error fetching roles:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ===== GROUPS ENDPOINTS =====
+// Get all groups
+app.get("/api/groups", (req, res) => {
+  try {
+    console.log("📥 GET /api/groups");
+    const groups = db.prepare("SELECT * FROM groups ORDER BY id").all();
+    console.log(`✅ Retrieved ${groups.length} groups`);
+    res.json(groups);
+  } catch (error) {
+    console.error("❌ Error fetching groups:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add a new group
+app.post("/api/groups", (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: "Group name is required" });
+    }
+    console.log(`📥 POST /api/groups - Adding group: ${name}`);
+    const result = db.prepare("INSERT INTO groups (name) VALUES (?)").run(name);
+    res.json({ id: result.lastInsertRowid, name });
+    console.log(`✅ Group added with ID: ${result.lastInsertRowid}`);
+  } catch (error) {
+    console.error("❌ Error adding group:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete a group
+app.delete("/api/groups/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`📥 DELETE /api/groups/${id}`);
+    db.prepare("DELETE FROM groups WHERE id = ?").run(id);
+    res.json({ success: true });
+    console.log(`✅ Group ${id} deleted`);
+  } catch (error) {
+    console.error("❌ Error deleting group:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ===== STUDENTS ENDPOINTS =====
+// Get all students
+app.get("/api/students", (req, res) => {
+  try {
+    console.log("📥 GET /api/students");
+    const students = db.prepare(`
+      SELECT s.id, s.full_name, s.phone, s.group_id, g.name as group_name
+      FROM students s
+      LEFT JOIN groups g ON s.group_id = g.id
+      ORDER BY s.full_name
+    `).all();
+    console.log(`✅ Retrieved ${students.length} students`);
+    res.json(students);
+  } catch (error) {
+    console.error("❌ Error fetching students:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add a new student
+app.post("/api/students", (req, res) => {
+  try {
+    const { full_name, lesson_id } = req.body;
+    if (!full_name) {
+      return res.status(400).json({ error: "Student name is required" });
+    }
+    console.log(`📥 POST /api/students - Adding student: ${full_name}`);
+    const result = db.prepare(
+      "INSERT INTO students (full_name, lesson_id) VALUES (?, ?)"
+    ).run(full_name, lesson_id || null);
+    res.json({ id: result.lastInsertRowid, full_name, lesson_id });
+    console.log(`✅ Student added with ID: ${result.lastInsertRowid}`);
+  } catch (error) {
+    console.error("❌ Error adding student:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get student details with attendance stats
+app.get("/api/students/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`📥 GET /api/students/${id}`);
+
+    // Get student basic info
+    const student = db.prepare(`
+      SELECT s.id, s.full_name, s.phone, s.group_id, g.name as group_name
+      FROM students s
+      LEFT JOIN groups g ON s.group_id = g.id
+      WHERE s.id = ?
+    `).get(id);
+
+    if (!student) {
+      return res.status(404).json({ error: "Student not found" });
+    }
+
+    // Get attendance statistics
+    const attendanceStats = db.prepare(`
+      SELECT
+        COUNT(*) as total_lessons,
+        SUM(CASE WHEN status = 'present' THEN 1 ELSE 0 END) as present_count,
+        SUM(CASE WHEN status = 'absent' THEN 1 ELSE 0 END) as absent_count,
+        SUM(CASE WHEN lateness = 'late' THEN 1 ELSE 0 END) as late_count,
+        ROUND(AVG(CASE WHEN status = 'present' THEN 1.0 ELSE 0.0 END) * 100, 1) as attendance_rate
+      FROM attendance
+      WHERE student_id = ?
+    `).get(id);
+
+    // Get recent attendance records
+    const recentAttendance = db.prepare(`
+      SELECT a.status, a.lateness, a.homework, a.comment, l.date, subj.name as subject_name
+      FROM attendance a
+      JOIN lessons l ON a.lesson_id = l.id
+      JOIN subjects subj ON l.subject_id = subj.id
+      WHERE a.student_id = ?
+      ORDER BY l.date DESC
+      LIMIT 10
+    `).all(id);
+
+    res.json({
+      ...student,
+      attendance_stats: attendanceStats,
+      recent_attendance: recentAttendance
+    });
+
+    console.log(`✅ Retrieved student ${id} details`);
+  } catch (error) {
+    console.error("❌ Error fetching student details:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const server = app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+});
+
+// Error handling
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  process.exit(1);
+});
+
+server.on('error', (err) => {
+  console.error('❌ Server error:', err);
+});
