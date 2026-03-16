@@ -11,3 +11,9 @@
   to = "https://todayubtcrm.onrender.com/api/:splat"
   status = 200
   force = true
+
+# SPA fallback: любые фронтовые роуты (например /login) должны отдавать index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
