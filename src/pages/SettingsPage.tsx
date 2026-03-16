@@ -1,15 +1,17 @@
-import { Settings, Save, Eye, EyeOff, KeyRound, User, Phone, Mail, Camera, Trash2 } from "lucide-react";
+import { Settings, Save, Eye, EyeOff, KeyRound, User, Phone, Mail, Camera, Trash2, Paintbrush } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { fetchUser, updateUser, uploadAvatar, deleteAvatar } from "@/lib/api";
 import { UserAvatar } from "@/components/UserAvatar";
 import { formatPhone } from "@/lib/utils";
+import { applyCrmBackground, getCrmBackground, setCrmBackground, type CrmBackground } from "@/lib/background";
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Администратор",
@@ -23,6 +25,7 @@ export default function SettingsPage() {
   const [name, setName] = useState("");
   const [surname, setSurname] = useState("");
   const [phone, setPhone] = useState("");
+  const [background, setBackground] = useState<CrmBackground>(() => getCrmBackground());
   const [saving, setSaving] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
@@ -49,6 +52,10 @@ export default function SettingsPage() {
       });
     }
   }, [user]);
+
+  useEffect(() => {
+    applyCrmBackground(background);
+  }, [background]);
 
   const handleSaveProfile = async () => {
     if (!user || !name.trim() || !surname.trim()) {
@@ -349,6 +356,45 @@ export default function SettingsPage() {
             <KeyRound className="h-4 w-4" />
             {changingPw ? "Сохранение..." : "Изменить пароль"}
           </Button>
+        </CardContent>
+      </Card>
+
+      {/* Appearance Card */}
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Paintbrush className="h-4 w-4" />
+            Оформление
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground uppercase tracking-wider">Фон приложения</Label>
+            <Select
+              value={background}
+              onValueChange={(value) => {
+                const next = value as CrmBackground;
+                setBackground(next);
+                setCrmBackground(next);
+                applyCrmBackground(next);
+                toast.success("Фон обновлён");
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Выберите фон" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="solid">По умолчанию</SelectItem>
+                <SelectItem value="dots">Точки</SelectItem>
+                <SelectItem value="grid">Сетка</SelectItem>
+                <SelectItem value="stripes">Диагональные линии</SelectItem>
+                <SelectItem value="crosshatch">Крест-штриховка</SelectItem>
+                <SelectItem value="rings">Кольца</SelectItem>
+                <SelectItem value="gradient">Мягкий градиент</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Сохраняется на этом устройстве и применяется сразу.</p>
+          </div>
         </CardContent>
       </Card>
     </div>

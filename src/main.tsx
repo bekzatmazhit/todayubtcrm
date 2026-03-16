@@ -3,6 +3,9 @@ import App from "./App.tsx";
 import "./index.css";
 import "./lib/i18n";
 import { ThemeProvider } from "./components/ThemeProvider";
+import { applyCrmBackground, getCrmBackground } from "./lib/background";
+
+applyCrmBackground(getCrmBackground());
 
 createRoot(document.getElementById("root")!).render(
   <ThemeProvider defaultTheme="light" storageKey="vite-ui-theme">

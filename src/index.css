@@ -98,6 +98,82 @@
     @apply bg-background text-foreground font-body antialiased;
   }
 
+  body.crm-bg-solid {
+    background-color: hsl(var(--background));
+    background-image: none;
+  }
+
+  body.crm-bg-dots {
+    background-color: hsl(var(--background));
+    background-image: radial-gradient(hsl(var(--border) / 0.45) 1px, transparent 1px);
+    background-size: 16px 16px;
+    background-position: 0 0;
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-grid {
+    background-color: hsl(var(--background));
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.35) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.35) 1px, transparent 1px);
+    background-size: 32px 32px;
+    background-position: 0 0;
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-stripes {
+    background-color: hsl(var(--background));
+    background-image: repeating-linear-gradient(
+      135deg,
+      hsl(var(--border) / 0.28) 0px,
+      hsl(var(--border) / 0.28) 1px,
+      transparent 1px,
+      transparent 14px
+    );
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-crosshatch {
+    background-color: hsl(var(--background));
+    background-image:
+      repeating-linear-gradient(
+        45deg,
+        hsl(var(--border) / 0.20) 0px,
+        hsl(var(--border) / 0.20) 1px,
+        transparent 1px,
+        transparent 18px
+      ),
+      repeating-linear-gradient(
+        -45deg,
+        hsl(var(--border) / 0.16) 0px,
+        hsl(var(--border) / 0.16) 1px,
+        transparent 1px,
+        transparent 18px
+      );
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-rings {
+    background-color: hsl(var(--background));
+    background-image: repeating-radial-gradient(
+      circle at 0 0,
+      hsl(var(--border) / 0.22) 0px,
+      hsl(var(--border) / 0.22) 1px,
+      transparent 1px,
+      transparent 26px
+    );
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-gradient {
+    background-color: hsl(var(--background));
+    background-image:
+      radial-gradient(600px circle at 15% 10%, hsl(var(--primary) / 0.10), transparent 55%),
+      radial-gradient(700px circle at 85% 20%, hsl(var(--accent) / 0.10), transparent 55%),
+      radial-gradient(700px circle at 50% 110%, hsl(var(--ring) / 0.08), transparent 60%);
+    background-attachment: fixed;
+  }
+
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-heading);
   }
