@@ -655,13 +655,15 @@ app.get("/api/attendance", (req, res) => {
 });
 
 // Attendance comments (lesson notes) by student for a date range
-// Query params: student_id, from, to, limit?
+// Query params: student_id, from?, to?, limit?
 // Returns: [{ date, teacher_name, subject_name, comment }]
 app.get("/api/attendance/comments/by-student", (req, res) => {
   try {
     const { student_id, from, to, limit } = req.query;
-    if (!student_id || !from || !to) return res.status(400).json({ error: "student_id, from and to required" });
+    if (!student_id) return res.status(400).json({ error: "student_id required" });
     const lim = Math.min(Math.max(parseInt(limit || "50"), 1), 200);
+
+    const hasRange = Boolean(from && to);
 
     const rows = db.prepare(`
       SELECT l.date,
@@ -674,14 +676,18 @@ app.get("/api/attendance/comments/by-student", (req, res) => {
       LEFT JOIN users u ON sch.teacher_id = u.id
       LEFT JOIN subjects subj ON sch.subject_id = subj.id
       WHERE a.student_id = ?
-        AND l.date BETWEEN ? AND ?
+        ${hasRange ? "AND l.date BETWEEN ? AND ?" : ""}
         AND a.comment IS NOT NULL
         AND TRIM(a.comment) != ''
       ORDER BY l.date DESC
       LIMIT ?
-    `).all(parseInt(student_id), from, to, lim);
+    `);
 
-    res.json(rows);
+    const args = hasRange
+      ? [parseInt(student_id), from, to, lim]
+      : [parseInt(student_id), lim];
+
+    res.json(rows.all(...args));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -44,6 +44,7 @@ import {
   updateTeacherFeedback,
   fetchTeacherFeedbackByStudent,
   fetchTeacherFeedbackSummary,
+  fetchLessonCommentsByStudent,
 } from "@/lib/api";
 
 const CHART_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#3b82f6", "#8b5cf6"];
@@ -111,6 +112,23 @@ function getMonthRange(offset = 0): { from: string; to: string; label: string } 
 function StudentDetailDialog({ student, onClose }: { student: any; onClose: () => void }) {
   const [details, setDetails] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  // Attendance comments state
+  const [commentFilter, setCommentFilter] = useState<'all' | 'month'>('all');
+  const [lessonComments, setLessonComments] = useState<any[]>([]);
+  const [commentsMonth, setCommentsMonth] = useState(() => new Date().toISOString().slice(0, 7));
+
+  useEffect(() => {
+    if (!student?.id) return;
+    if (commentFilter === 'all') {
+      fetchLessonCommentsByStudent({ studentId: student.id, limit: 200 }).then(setLessonComments);
+    } else {
+      const [y, m] = commentsMonth.split('-');
+      const from = `${commentsMonth}-01`;
+      const lastDay = new Date(Number(y), Number(m), 0).getDate();
+      const to = `${commentsMonth}-${String(lastDay).padStart(2, '0')}`;
+      fetchLessonCommentsByStudent({ studentId: student.id, from, to, limit: 200 }).then(setLessonComments);
+    }
+  }, [student?.id, commentFilter, commentsMonth]);
 
   // Date range for stats tab
   const [rangeMode, setRangeMode] = useState<string>("current"); // current, prev, custom
@@ -204,11 +222,50 @@ function StudentDetailDialog({ student, onClose }: { student: any; onClose: () =
                   <Badge className="ml-1.5 h-4 text-xs" variant="destructive">{details.absences.length}</Badge>
                 )}
               </TabsTrigger>
+              <TabsTrigger value="attendance-comments">
+                <MessageSquare className="h-3.5 w-3.5 mr-1" />Комментарии
+              </TabsTrigger>
               <TabsTrigger value="notes">Комментарии</TabsTrigger>
               <TabsTrigger value="teacher-feedback">
                 <GraduationCap className="h-3.5 w-3.5 mr-1" />Отзывы учителей
               </TabsTrigger>
             </TabsList>
+          {/* ====== ATTENDANCE COMMENTS TAB ====== */}
+          <TabsContent value="attendance-comments" className="pt-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Select value={commentFilter} onValueChange={v => setCommentFilter(v as 'all' | 'month')}>
+                <SelectTrigger className="w-40"><SelectValue placeholder="Фильтр" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Все</SelectItem>
+                  <SelectItem value="month">За месяц</SelectItem>
+                </SelectContent>
+              </Select>
+              {commentFilter === 'month' && (
+                <Input type="month" value={commentsMonth} onChange={e => setCommentsMonth(e.target.value)} className="w-36 h-8" />
+              )}
+            </div>
+            {lessonComments.length === 0 ? (
+              <div className="flex flex-col items-center py-8 text-muted-foreground">
+                <MessageSquare className="h-8 w-8 mb-2 opacity-30" />
+                <p className="text-sm">Нет комментариев</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {lessonComments.map((c: any, i: number) => (
+                  <Card key={i}>
+                    <CardContent className="pt-3 pb-3">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <span className="text-xs font-semibold text-muted-foreground">{c.date}</span>
+                        {c.teacher_name && <Badge variant="outline" className="text-[10px]">{c.teacher_name}</Badge>}
+                        {c.subject_name && <Badge variant="secondary" className="text-[10px]">{c.subject_name}</Badge>}
+                      </div>
+                      <p className="text-sm whitespace-pre-wrap">{c.comment}</p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </TabsContent>
 
             {/* ====== STATS / JOURNAL TAB ====== */}
             <TabsContent value="stats" className="pt-4">

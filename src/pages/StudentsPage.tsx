@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { fetchStudents, fetchGroups, fetchStudent, updateStudent, fetchTeacherFeedbackByStudent, fetchParentFeedback, fetchLessonCommentsByStudent } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatPhone } from "@/lib/utils";
@@ -59,6 +59,8 @@ interface StudentDetails extends Student {
 
 type SortKey = "full_name" | "group_name" | "attendance_rate" | "last_ent_score";
 
+type CommentFilter = "all" | "month";
+
 export default function StudentsPage() {
   const { user } = useAuth();
   const [search, setSearch] = useState("");
@@ -75,9 +77,13 @@ export default function StudentsPage() {
   const [parentFeedback, setParentFeedback] = useState<any[]>([]);
   const [lessonComments, setLessonComments] = useState<any[]>([]);
   const [feedbackMonth, setFeedbackMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [commentFilter, setCommentFilter] = useState<CommentFilter>("all");
   const [editMode, setEditMode] = useState(false);
   const [editForm, setEditForm] = useState({ full_name: "", phone: "", parent_phone: "", parent_name: "" });
   const [saving, setSaving] = useState(false);
+
+  const lastTeacherFeedbackKeyRef = useRef<string>("");
+  const lastLessonCommentsKeyRef = useRef<string>("");
 
   const getMonthRange = (month: string) => {
     const [yStr, mStr] = month.split("-");
@@ -176,8 +182,15 @@ export default function StudentsPage() {
       setTeacherFeedback(tf || []);
       setParentFeedback(pf || []);
 
-      if (range) {
-        const lc = await fetchLessonCommentsByStudent({ studentId: student.id, from: range.from, to: range.to, limit: 100 });
+      lastTeacherFeedbackKeyRef.current = `${student.id}:${feedbackMonth}`;
+
+      if (commentFilter === "all") {
+        lastLessonCommentsKeyRef.current = `${student.id}:all`;
+        const lc = await fetchLessonCommentsByStudent({ studentId: student.id, limit: 200 });
+        setLessonComments(lc || []);
+      } else if (range) {
+        lastLessonCommentsKeyRef.current = `${student.id}:month:${feedbackMonth}`;
+        const lc = await fetchLessonCommentsByStudent({ studentId: student.id, from: range.from, to: range.to, limit: 200 });
         setLessonComments(lc || []);
       }
     } catch (error) {
@@ -233,18 +246,37 @@ export default function StudentsPage() {
     return "bg-red-500/10";
   };
 
-  // Reload feedback when month changes
+  // Reload teacher feedback when month changes
   useEffect(() => {
     if (!selectedStudent || !modalOpen) return;
+    const key = `${selectedStudent.id}:${feedbackMonth}`;
+    if (lastTeacherFeedbackKeyRef.current === key) return;
+    lastTeacherFeedbackKeyRef.current = key;
     fetchTeacherFeedbackByStudent(selectedStudent.id, feedbackMonth).then(setTeacherFeedback);
+  }, [feedbackMonth, modalOpen, selectedStudent]);
+
+  // Reload attendance comments when filter/month changes
+  useEffect(() => {
+    if (!selectedStudent || !modalOpen) return;
+
+    if (commentFilter === "all") {
+      const key = `${selectedStudent.id}:all`;
+      if (lastLessonCommentsKeyRef.current === key) return;
+      lastLessonCommentsKeyRef.current = key;
+      fetchLessonCommentsByStudent({ studentId: selectedStudent.id, limit: 200 }).then(setLessonComments);
+      return;
+    }
 
     const range = getMonthRange(feedbackMonth);
     if (!range) {
       setLessonComments([]);
       return;
     }
-    fetchLessonCommentsByStudent({ studentId: selectedStudent.id, from: range.from, to: range.to, limit: 100 }).then(setLessonComments);
-  }, [feedbackMonth]);
+    const key = `${selectedStudent.id}:month:${feedbackMonth}`;
+    if (lastLessonCommentsKeyRef.current === key) return;
+    lastLessonCommentsKeyRef.current = key;
+    fetchLessonCommentsByStudent({ studentId: selectedStudent.id, from: range.from, to: range.to, limit: 200 }).then(setLessonComments);
+  }, [commentFilter, feedbackMonth, modalOpen, selectedStudent]);
 
   const MONTH_OPTIONS = [
     { value: "2025-09", label: "Сентябрь 2025" },
@@ -632,11 +664,12 @@ export default function StudentsPage() {
             </div>
           ) : selectedStudent && (
             <Tabs defaultValue="info" className="mt-2">
-              <TabsList className="grid w-full grid-cols-4">
+              <TabsList className="grid w-full grid-cols-5">
                 <TabsTrigger value="info">Информация</TabsTrigger>
                 <TabsTrigger value="attendance">Посещаемость</TabsTrigger>
                 <TabsTrigger value="ent">ЕНТ</TabsTrigger>
-                <TabsTrigger value="reviews">Комментарии</TabsTrigger>
+                <TabsTrigger value="teacherReviews">Отзывы учителей</TabsTrigger>
+                <TabsTrigger value="comments">Комментарии</TabsTrigger>
               </TabsList>
 
               <TabsContent value="info" className="space-y-4 mt-4">
@@ -782,7 +815,7 @@ export default function StudentsPage() {
                 )}
               </TabsContent>
 
-              <TabsContent value="reviews" className="space-y-4 mt-4">
+              <TabsContent value="teacherReviews" className="space-y-4 mt-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Select value={feedbackMonth} onValueChange={setFeedbackMonth}>
                     <SelectTrigger className="w-48">
@@ -796,38 +829,8 @@ export default function StudentsPage() {
                   </Select>
                 </div>
 
-                {/* Lesson comments */}
-                {lessonComments.length > 0 ? (
-                  <div>
-                    <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
-                      <MessageSquare className="h-4 w-4" />Комментарии в уроках
-                    </h4>
-                    <div className="space-y-2">
-                      {lessonComments.map((c: any, i: number) => (
-                        <div key={`${c.date}-${i}`} className="p-3 border rounded-lg">
-                          <div className="flex flex-wrap items-center gap-2 mb-1">
-                            <span className="text-xs font-semibold text-muted-foreground">{c.date}</span>
-                            {c.teacher_name && <Badge variant="outline" className="text-[10px]">{c.teacher_name}</Badge>}
-                            {c.subject_name && <Badge variant="secondary" className="text-[10px]">{c.subject_name}</Badge>}
-                          </div>
-                          <p className="text-sm whitespace-pre-wrap">{c.comment}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-4 text-muted-foreground">
-                    <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                    <p className="text-sm">Нет комментариев в уроках за выбранный месяц</p>
-                  </div>
-                )}
-
-                {/* Teacher feedback */}
                 {teacherFeedback.length > 0 ? (
                   <div>
-                    <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
-                      <MessageSquare className="h-4 w-4" />Отзывы учителей
-                    </h4>
                     <div className="space-y-2">
                       {teacherFeedback.map((f: any) => (
                         <div key={f.id} className="p-3 border rounded-lg">
@@ -846,26 +849,53 @@ export default function StudentsPage() {
                     <p className="text-sm">Нет отзывов учителей за выбранный месяц</p>
                   </div>
                 )}
+              </TabsContent>
 
-                {/* Parent feedback */}
-                {parentFeedback.length > 0 && (
+              <TabsContent value="comments" className="space-y-4 mt-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Select value={commentFilter} onValueChange={(v) => setCommentFilter(v as CommentFilter)}>
+                    <SelectTrigger className="w-48">
+                      <SelectValue placeholder="Фильтр" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Все</SelectItem>
+                      <SelectItem value="month">За месяц</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  {commentFilter === "month" && (
+                    <Select value={feedbackMonth} onValueChange={setFeedbackMonth}>
+                      <SelectTrigger className="w-48">
+                        <SelectValue placeholder="Месяц" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {MONTH_OPTIONS.map(m => (
+                          <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+
+                {lessonComments.length > 0 ? (
                   <div>
-                    <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
-                      <Phone className="h-4 w-4" />Обратная связь с родителями
-                    </h4>
                     <div className="space-y-2">
-                      {parentFeedback.map((f: any) => (
-                        <div key={f.id} className="p-3 border rounded-lg">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-xs font-semibold text-muted-foreground">{f.date}</span>
-                            <Badge variant={f.status === 'completed' ? 'default' : 'outline'} className="text-[10px]">
-                              {f.status === 'completed' ? 'Выполнено' : f.status === 'pending' ? 'Ожидание' : f.status || '—'}
-                            </Badge>
+                      {lessonComments.map((c: any, i: number) => (
+                        <div key={`${c.date}-${i}`} className="p-3 border rounded-lg">
+                          <div className="flex flex-wrap items-center gap-2 mb-1">
+                            <span className="text-xs font-semibold text-muted-foreground">{c.date}</span>
+                            {c.teacher_name && <Badge variant="outline" className="text-[10px]">{c.teacher_name}</Badge>}
+                            {c.subject_name && <Badge variant="secondary" className="text-[10px]">{c.subject_name}</Badge>}
                           </div>
-                          {f.notes && <p className="text-sm">{f.notes}</p>}
+                          <p className="text-sm whitespace-pre-wrap">{c.comment}</p>
                         </div>
                       ))}
                     </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-4 text-muted-foreground">
+                    <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                    <p className="text-sm">Нет комментариев</p>
                   </div>
                 )}
               </TabsContent>

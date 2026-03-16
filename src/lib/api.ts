@@ -196,12 +196,12 @@ export async function fetchAttendanceByScheduleDate(params: { scheduleId: number
   }
 }
 
-export async function fetchLessonCommentsByStudent(params: { studentId: number; from: string; to: string; limit?: number }) {
+export async function fetchLessonCommentsByStudent(params: { studentId: number; from?: string; to?: string; limit?: number }) {
   try {
     const search = new URLSearchParams();
     search.set("student_id", String(params.studentId));
-    search.set("from", params.from);
-    search.set("to", params.to);
+    if (params.from) search.set("from", params.from);
+    if (params.to) search.set("to", params.to);
     if (params.limit !== undefined) search.set("limit", String(params.limit));
     const res = await fetch(`${API_BASE}/attendance/comments/by-student?${search.toString()}`, defaultOptions);
     if (!res.ok) throw new Error("Failed to fetch lesson comments");
