@@ -174,6 +174,115 @@
     background-attachment: fixed;
   }
 
+  body.crm-bg-microdots {
+    background-color: hsl(var(--background));
+    background-image: radial-gradient(hsl(var(--border) / 0.35) 0.8px, transparent 0.8px);
+    background-size: 10px 10px;
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-macrodots {
+    background-color: hsl(var(--background));
+    background-image: radial-gradient(hsl(var(--border) / 0.25) 2px, transparent 2px);
+    background-size: 26px 26px;
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-diagonal-grid {
+    background-color: hsl(var(--background));
+    background-image:
+      linear-gradient(45deg, hsl(var(--border) / 0.28) 1px, transparent 1px),
+      linear-gradient(-45deg, hsl(var(--border) / 0.28) 1px, transparent 1px);
+    background-size: 36px 36px;
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-isometric {
+    background-color: hsl(var(--background));
+    background-image:
+      linear-gradient(30deg, hsl(var(--border) / 0.22) 12%, transparent 12.5%, transparent 87%, hsl(var(--border) / 0.22) 87.5%, hsl(var(--border) / 0.22)),
+      linear-gradient(150deg, hsl(var(--border) / 0.18) 12%, transparent 12.5%, transparent 87%, hsl(var(--border) / 0.18) 87.5%, hsl(var(--border) / 0.18)),
+      linear-gradient(90deg, hsl(var(--border) / 0.14) 12%, transparent 12.5%, transparent 87%, hsl(var(--border) / 0.14) 87.5%, hsl(var(--border) / 0.14));
+    background-size: 42px 74px;
+    background-position: 0 0, 0 0, 0 0;
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-checker {
+    background-color: hsl(var(--background));
+    background-image:
+      linear-gradient(45deg, hsl(var(--border) / 0.22) 25%, transparent 25%),
+      linear-gradient(-45deg, hsl(var(--border) / 0.22) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, hsl(var(--border) / 0.22) 75%),
+      linear-gradient(-45deg, transparent 75%, hsl(var(--border) / 0.22) 75%);
+    background-size: 28px 28px;
+    background-position: 0 0, 0 14px, 14px -14px, -14px 0;
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-confetti {
+    background-color: hsl(var(--background));
+    background-image:
+      radial-gradient(hsl(var(--primary) / 0.14) 1px, transparent 1px),
+      radial-gradient(hsl(var(--accent) / 0.12) 1px, transparent 1px),
+      radial-gradient(hsl(var(--ring) / 0.10) 1px, transparent 1px);
+    background-size: 38px 38px, 54px 54px, 72px 72px;
+    background-position: 0 0, 10px 18px, 24px 8px;
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-paper {
+    background-color: hsl(var(--background));
+    background-image:
+      linear-gradient(to bottom, transparent 0%, transparent 96%, hsl(var(--border) / 0.30) 100%),
+      linear-gradient(to right, transparent 0%, transparent 96%, hsl(var(--border) / 0.24) 100%);
+    background-size: 24px 24px;
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-waves {
+    background-color: hsl(var(--background));
+    background-image:
+      radial-gradient(40px 12px at 0 6px, hsl(var(--border) / 0.25) 50%, transparent 52%),
+      radial-gradient(40px 12px at 20px 18px, hsl(var(--border) / 0.18) 50%, transparent 52%);
+    background-size: 40px 24px;
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-sunburst {
+    background-color: hsl(var(--background));
+    background-image: repeating-conic-gradient(
+      from 0deg,
+      hsl(var(--border) / 0.20) 0deg,
+      hsl(var(--border) / 0.20) 6deg,
+      transparent 6deg,
+      transparent 18deg
+    );
+    background-size: 260px 260px;
+    background-position: 50% 20%;
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-topo {
+    background-color: hsl(var(--background));
+    background-image:
+      radial-gradient(60px circle at 20% 30%, transparent 60%, hsl(var(--border) / 0.22) 61%, transparent 62%),
+      radial-gradient(90px circle at 80% 20%, transparent 60%, hsl(var(--border) / 0.18) 61%, transparent 62%),
+      radial-gradient(120px circle at 60% 80%, transparent 60%, hsl(var(--border) / 0.16) 61%, transparent 62%);
+    background-attachment: fixed;
+  }
+
+  body.crm-bg-image {
+    background-color: hsl(var(--background));
+    background-image:
+      linear-gradient(hsl(var(--background) / 0.78), hsl(var(--background) / 0.78)),
+      var(--crm-bg-image);
+    background-size: auto, cover;
+    background-position: 0 0, center;
+    background-repeat: repeat, no-repeat;
+    background-attachment: fixed;
+  }
+
   :root.crm-style-primary-accent {
     --accent: var(--primary);
     --accent-foreground: var(--primary-foreground);

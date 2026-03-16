@@ -11,7 +11,15 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { fetchUser, updateUser, uploadAvatar, deleteAvatar } from "@/lib/api";
 import { UserAvatar } from "@/components/UserAvatar";
 import { formatPhone } from "@/lib/utils";
-import { applyCrmBackground, getCrmBackground, setCrmBackground, type CrmBackground } from "@/lib/background";
+import {
+  applyCrmBackground,
+  clearCrmBackgroundImageUrl,
+  getCrmBackground,
+  getCrmBackgroundImageUrl,
+  setCrmBackground,
+  setCrmBackgroundImageUrl,
+  type CrmBackground,
+} from "@/lib/background";
 import { applyCrmStyle, getCrmStyle, setCrmStyle, type CrmStyle } from "@/lib/style";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -27,6 +35,7 @@ export default function SettingsPage() {
   const [surname, setSurname] = useState("");
   const [phone, setPhone] = useState("");
   const [background, setBackground] = useState<CrmBackground>(() => getCrmBackground());
+  const [backgroundImageUrl, setBackgroundImageUrl] = useState(() => getCrmBackgroundImageUrl());
   const [style, setStyle] = useState<CrmStyle>(() => getCrmStyle());
   const [saving, setSaving] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
@@ -397,9 +406,77 @@ export default function SettingsPage() {
                 <SelectItem value="crosshatch">Крест-штриховка</SelectItem>
                 <SelectItem value="rings">Кольца</SelectItem>
                 <SelectItem value="gradient">Мягкий градиент</SelectItem>
+                <SelectItem value="microdots">Мелкие точки</SelectItem>
+                <SelectItem value="macrodots">Крупные точки</SelectItem>
+                <SelectItem value="diagonal-grid">Диагональная сетка</SelectItem>
+                <SelectItem value="isometric">Изометрия</SelectItem>
+                <SelectItem value="checker">Шахматка</SelectItem>
+                <SelectItem value="confetti">Конфетти</SelectItem>
+                <SelectItem value="paper">Бумага</SelectItem>
+                <SelectItem value="waves">Волны</SelectItem>
+                <SelectItem value="sunburst">Лучики</SelectItem>
+                <SelectItem value="topo">Топография</SelectItem>
+                <SelectItem value="image">Картинка (по ссылке)</SelectItem>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">Сохраняется на этом устройстве и применяется сразу.</p>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs text-muted-foreground uppercase tracking-wider">Картинка фона (URL)</Label>
+            <div className="flex gap-2">
+              <Input
+                value={backgroundImageUrl}
+                onChange={(e) => setBackgroundImageUrl(e.target.value)}
+                placeholder="https://..."
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  const value = backgroundImageUrl.trim();
+                  if (!value) {
+                    toast.error("Вставьте ссылку на картинку");
+                    return;
+                  }
+                  try {
+                    const parsed = new URL(value);
+                    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+                      toast.error("Только http/https ссылки");
+                      return;
+                    }
+                    setCrmBackgroundImageUrl(value);
+                    setBackground("image");
+                    setCrmBackground("image");
+                    applyCrmBackground("image");
+                    toast.success("Картинка фона применена");
+                  } catch {
+                    toast.error("Некорректная ссылка");
+                  }
+                }}
+              >
+                Применить
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  clearCrmBackgroundImageUrl();
+                  setBackgroundImageUrl("");
+                  if (background === "image") {
+                    setBackground("solid");
+                    setCrmBackground("solid");
+                    applyCrmBackground("solid");
+                  } else {
+                    applyCrmBackground(background);
+                  }
+                  toast.success("Картинка фона очищена");
+                }}
+              >
+                Очистить
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">Картинка ставится как cover и затемняется цветом темы.</p>
           </div>
 
           <Separator />
