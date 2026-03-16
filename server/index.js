@@ -623,6 +623,37 @@ app.delete("/api/students/:id", (req, res) => {
 
 // ====================== ATTENDANCE ======================
 
+// Fetch attendance for an existing lesson.
+// Query params:
+// - lesson_id: number
+//   OR
+// - schedule_id: number + date: YYYY-MM-DD
+// Returns: [{ student_id, status, lateness, homework, comment }]
+app.get("/api/attendance", (req, res) => {
+  try {
+    const { lesson_id, schedule_id, date } = req.query;
+
+    let lessonId = lesson_id ? parseInt(lesson_id) : null;
+    if (!lessonId) {
+      if (!schedule_id || !date) return res.status(400).json({ error: "lesson_id or schedule_id+date required" });
+      const lesson = db.prepare("SELECT id FROM lessons WHERE schedule_id = ? AND date = ?")
+        .get(parseInt(schedule_id), date);
+      if (!lesson) return res.json([]);
+      lessonId = lesson.id;
+    }
+
+    const rows = db.prepare(`
+      SELECT student_id, status, lateness, homework, comment
+      FROM attendance
+      WHERE lesson_id = ?
+    `).all(lessonId);
+
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post("/api/attendance", (req, res) => {
   try {
     const { student_id, lesson_id, schedule_id, date, status, lateness, homework, comment } = req.body;

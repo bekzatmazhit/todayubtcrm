@@ -8,7 +8,7 @@ import { CheckCircle2, XCircle, Clock, BookOpen, BookX, BookMarked, Save } from 
 import { Lesson, Student } from "@/data/mockSchedule";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-import { updateAttendance } from "@/lib/api";
+import { fetchAttendanceByScheduleDate, updateAttendance } from "@/lib/api";
 
 interface Props {
   lesson: Lesson | null;
@@ -29,6 +29,43 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
       setStudents(lesson.students.map((s) => ({ ...s })));
     }
   }, [lesson?.id, open]);
+
+  // Pull existing attendance for this schedule/date (so comments persist across openings)
+  useEffect(() => {
+    if (!lesson || !open) return;
+    const scheduleId = getScheduleId();
+    if (!scheduleId) return;
+    const dateStr = date || new Date().toISOString().slice(0, 10);
+
+    let cancelled = false;
+    (async () => {
+      const rows = await fetchAttendanceByScheduleDate({ scheduleId, date: dateStr });
+      if (cancelled) return;
+
+      const byStudentId = new Map<number, any>();
+      for (const r of rows as any[]) {
+        if (typeof r?.student_id === "number") byStudentId.set(r.student_id, r);
+      }
+
+      setStudents((prev) => prev.map((s) => {
+        const sid = getStudentId(s.id);
+        if (!sid) return s;
+        const rec = byStudentId.get(sid);
+        if (!rec) return s;
+        return {
+          ...s,
+          attendance: (rec.status as any) || s.attendance,
+          lateness: (rec.lateness as any) || s.lateness,
+          homework: (rec.homework as any) || s.homework,
+          comment: rec.comment ?? "",
+        };
+      }));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [lesson?.id, open, date]);
 
   const updateStudentLocal = (id: string, updates: Partial<Student>) => {
     setStudents((prev) => prev.map((s) => (s.id === id ? { ...s, ...updates } : s)));

@@ -182,6 +182,20 @@ export async function fetchMarkedLessons(params: { from: string; to: string; tea
   }
 }
 
+export async function fetchAttendanceByScheduleDate(params: { scheduleId: number; date: string }) {
+  try {
+    const search = new URLSearchParams();
+    search.set("schedule_id", String(params.scheduleId));
+    search.set("date", params.date);
+    const res = await fetch(`${API_BASE}/attendance?${search.toString()}`, defaultOptions);
+    if (!res.ok) throw new Error("Failed to fetch attendance");
+    return await res.json();
+  } catch (error) {
+    console.error("Error fetching attendance:", error);
+    return [];
+  }
+}
+
 // ====================== AD-HOC LESSONS ======================
 
 export async function fetchAdhocLessons(date?: string, teacherId?: string) {

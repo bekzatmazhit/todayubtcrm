@@ -697,6 +697,11 @@ export default function StudentsPage() {
                                 <div>
                                   <p className="font-medium text-xs">{record.subject_name || "—"}</p>
                                   <p className="text-[10px] text-muted-foreground">{record.date}</p>
+                                  {record.comment && (
+                                    <p className="text-[10px] text-muted-foreground/80 truncate max-w-[220px]">
+                                      {record.comment}
+                                    </p>
+                                  )}
                                 </div>
                               </div>
                               <div className="flex gap-1">
