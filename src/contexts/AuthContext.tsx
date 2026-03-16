@@ -22,6 +22,8 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+const API_BASE = import.meta.env.VITE_API_URL || "/api";
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(() => {
     const saved = sessionStorage.getItem("today_crm_user");
@@ -30,10 +32,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     try {
-      const response = await fetch(`http://${window.location.hostname}:3001/api/login`, {
+      const response = await fetch(`${API_BASE}/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({ email, password }),
       });
 
@@ -66,9 +67,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(() => {
     // Inform server to revoke refresh token and clear cookies
-    fetch(`http://${window.location.hostname}:3001/api/logout`, {
+    fetch(`${API_BASE}/logout`, {
       method: "POST",
-      credentials: "include",
     }).catch(() => {});
 
     setUser(null);
@@ -87,9 +87,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Load permissions on login
   useEffect(() => {
     if (!user || user.permissions) return;
-    fetch(`http://${window.location.hostname}:3001/api/users/${user.id}/permissions`, {
-      credentials: "include",
-    })
+    fetch(`${API_BASE}/users/${user.id}/permissions`)
       .then(res => res.ok ? res.json() : [])
       .then((perms: string[]) => {
         setUser(prev => {

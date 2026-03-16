@@ -36,6 +36,8 @@ export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+
+  const API_BASE = import.meta.env.VITE_API_URL || "/api";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -84,7 +86,7 @@ export default function Login() {
     if (!forgotEmail) return;
     setForgotLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:3001/api/password-reset-request`, {
+      const res = await fetch(`${API_BASE}/password-reset-request`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: forgotEmail }),

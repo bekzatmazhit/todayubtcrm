@@ -1,4 +1,4 @@
-const CACHE_NAME = 'today-crm-v1';
+const CACHE_NAME = 'today-crm-v2';
 const STATIC_ASSETS = [
   '/',
   '/favicon.svg',
