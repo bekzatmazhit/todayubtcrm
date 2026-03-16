@@ -1,4 +1,4 @@
-import { Users, Filter, TrendingUp, Calendar, BookOpen, Search, Phone, GraduationCap, UserCheck, ArrowUpDown, Download, MessageSquare, Pencil, Save, X } from "lucide-react";
+import { Users, Filter, TrendingUp, Calendar, BookOpen, Search, Phone, GraduationCap, UserCheck, ArrowUpDown, Download, MessageSquare, Pencil, Save, X, ImagePlus, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useState, useEffect, useMemo, useRef } from "react";
-import { fetchStudents, fetchGroups, fetchStudent, updateStudent, fetchTeacherFeedbackByStudent, fetchParentFeedback, fetchLessonCommentsByStudent } from "@/lib/api";
+import { fetchStudents, fetchGroups, fetchStudent, updateStudent, fetchTeacherFeedbackByStudent, fetchParentFeedback, fetchLessonCommentsByStudent, uploadStudentAvatar, deleteStudentAvatar } from "@/lib/api";
+import { UserAvatar } from "@/components/UserAvatar";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatPhone } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -577,10 +578,15 @@ export default function StudentsPage() {
                   className="border-b hover:bg-muted/30 cursor-pointer transition-colors"
                 >
                   <td className="p-3">
-                    <p className="font-medium text-sm">{student.full_name}</p>
-                    {student.parent_name && (
-                      <p className="text-[11px] text-muted-foreground">Родитель: {student.parent_name}</p>
-                    )}
+                    <div className="flex items-center gap-2">
+                      <UserAvatar user={student} size="sm" />
+                      <div>
+                        <p className="font-medium text-sm">{student.full_name}</p>
+                        {student.parent_name && (
+                          <p className="text-[11px] text-muted-foreground">Родитель: {student.parent_name}</p>
+                        )}
+                      </div>
+                    </div>
                   </td>
                   <td className="p-3">
                     <Badge variant="outline" className="text-xs">{student.group_name || "—"}</Badge>
@@ -663,7 +669,7 @@ export default function StudentsPage() {
               </div>
             </div>
           ) : selectedStudent && (
-            <Tabs defaultValue="info" className="mt-2">
+              <Tabs defaultValue="info" className="mt-2">
               <TabsList className="grid w-full grid-cols-5">
                 <TabsTrigger value="info">Информация</TabsTrigger>
                 <TabsTrigger value="attendance">Посещаемость</TabsTrigger>
@@ -673,6 +679,47 @@ export default function StudentsPage() {
               </TabsList>
 
               <TabsContent value="info" className="space-y-4 mt-4">
+                <div className="flex items-center gap-6 mb-4">
+                  <UserAvatar user={selectedStudent} size="lg" />
+                  {canEditStudent(selectedStudent) && !editMode && (
+                    <div className="flex flex-col gap-2">
+                      <label htmlFor="student-avatar-upload" className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-primary">
+                        <ImagePlus className="h-4 w-4" /> Загрузить фото
+                        <input
+                          id="student-avatar-upload"
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            try {
+                              await uploadStudentAvatar(selectedStudent.id, file);
+                              const updated = await fetchStudent(selectedStudent.id.toString());
+                              setSelectedStudent(updated);
+                              setStudents(prev => prev.map(s => s.id === selectedStudent.id ? { ...s, avatar_url: updated.avatar_url } : s));
+                            } catch (err) { alert("Ошибка загрузки фото"); }
+                          }}
+                        />
+                      </label>
+                      {selectedStudent.avatar_url && (
+                        <button
+                          className="flex items-center gap-1 text-xs text-destructive hover:underline"
+                          onClick={async () => {
+                            try {
+                              await deleteStudentAvatar(selectedStudent.id);
+                              const updated = await fetchStudent(selectedStudent.id.toString());
+                              setSelectedStudent(updated);
+                              setStudents(prev => prev.map(s => s.id === selectedStudent.id ? { ...s, avatar_url: null } : s));
+                            } catch (err) { alert("Ошибка удаления фото"); }
+                          }}
+                        >
+                          <Trash2 className="h-3 w-3" /> Удалить фото
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
                 {editMode ? (
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1.5">

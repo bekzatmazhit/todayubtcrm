@@ -106,6 +106,7 @@ export function initializeDatabase() {
       parent_name  TEXT,
       group_id     INTEGER,
       status       TEXT DEFAULT 'active',
+      avatar_url   TEXT,
       FOREIGN KEY(group_id) REFERENCES groups(id)
     );
 
@@ -347,6 +348,8 @@ export function initializeDatabase() {
 
   // Migrate: add avatar_url to users
   try { db.exec(`ALTER TABLE users ADD COLUMN avatar_url TEXT`); } catch {}
+  // Migrate: add avatar_url to students
+  try { db.exec(`ALTER TABLE students ADD COLUMN avatar_url TEXT`); } catch {}
 
   // Migrate: add confirmation_status and confirmed_at to tasks
   try { db.exec(`ALTER TABLE tasks ADD COLUMN confirmation_status TEXT DEFAULT 'none'`); } catch {}

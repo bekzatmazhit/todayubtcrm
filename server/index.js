@@ -2012,6 +2012,7 @@ const avatarUpload = multer({
   },
 });
 
+// User avatar upload (existing)
 app.post("/api/users/:id/avatar", avatarUpload.single("avatar"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No image file provided" });
@@ -2037,6 +2038,50 @@ app.post("/api/users/:id/avatar", avatarUpload.single("avatar"), async (req, res
     const avatarUrl = `/uploads/avatars/${filename}`;
     db.prepare("UPDATE users SET avatar_url = ? WHERE id = ?").run(avatarUrl, userId);
     res.json({ avatar_url: avatarUrl });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Student avatar upload
+app.post("/api/students/:id/avatar", avatarUpload.single("avatar"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No image file provided" });
+    const studentId = req.params.id;
+    const student = db.prepare("SELECT id, avatar_url FROM students WHERE id = ?").get(studentId);
+    if (!student) return res.status(404).json({ error: "Student not found" });
+
+    // Delete old avatar file if exists
+    if (student.avatar_url) {
+      const oldPath = path.join(__dirname, student.avatar_url);
+      try { fs.unlinkSync(oldPath); } catch {}
+    }
+
+    const filename = `student_avatar_${studentId}_${Date.now()}.webp`;
+    const filePath = path.join(avatarsDir, filename);
+
+    // Resize & crop to 400x400 square, compress as webp
+    await sharp(req.file.buffer)
+      .resize(400, 400, { fit: "cover", position: "center" })
+      .webp({ quality: 80 })
+      .toFile(filePath);
+
+    const avatarUrl = `/uploads/avatars/${filename}`;
+    db.prepare("UPDATE students SET avatar_url = ? WHERE id = ?").run(avatarUrl, studentId);
+    res.json({ avatar_url: avatarUrl });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Student avatar delete
+app.delete("/api/students/:id/avatar", async (req, res) => {
+  try {
+    const studentId = req.params.id;
+    const student = db.prepare("SELECT id, avatar_url FROM students WHERE id = ?").get(studentId);
+    if (!student) return res.status(404).json({ error: "Student not found" });
+    if (student.avatar_url) {
+      const oldPath = path.join(__dirname, student.avatar_url);
+      try { fs.unlinkSync(oldPath); } catch {}
+    }
+    db.prepare("UPDATE students SET avatar_url = NULL WHERE id = ?").run(studentId);
+    res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

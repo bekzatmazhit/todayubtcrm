@@ -5,6 +5,9 @@ import {
   ClipboardList, Clock, PhoneCall, CircleCheck, Circle, MessageSquare, Edit, GraduationCap,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { UserAvatar } from "@/components/UserAvatar";
+import { ImagePlus } from "lucide-react";
+import { uploadStudentAvatar, deleteStudentAvatar } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatPhone } from "@/lib/utils";
@@ -181,25 +184,62 @@ function StudentDetailDialog({ student, onClose }: { student: any; onClose: () =
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 flex-wrap">
-            <Users className="h-5 w-5 text-primary shrink-0" />
-            {student.full_name}
-            <Badge variant="outline" className="text-xs">{student.group_name}</Badge>
+          <DialogTitle className="flex items-center gap-4 flex-wrap">
+            <UserAvatar user={student} size="lg" />
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-lg">{student.full_name}</span>
+                <Badge variant="outline" className="text-xs">{student.group_name}</Badge>
+              </div>
+              <div className="flex gap-4 text-sm text-muted-foreground pt-1 flex-wrap">
+                {student.last_ent_score != null && (
+                  <span className="flex items-center gap-1">
+                    <BookOpen className="h-3.5 w-3.5" />
+                    Общий балл ЕНТ: <strong className="text-foreground ml-0.5">{student.last_ent_score}</strong>
+                  </span>
+                )}
+                {student.parent_name && (
+                  <span className="flex items-center gap-1"><Users className="h-3.5 w-3.5" />{student.parent_name}</span>
+                )}
+                {student.parent_phone && (
+                  <span className="flex items-center gap-1"><Phone className="h-3.5 w-3.5" />{formatPhone(student.parent_phone)}</span>
+                )}
+              </div>
+              {/* upload/delete avatar */}
+              <div className="mt-2">
+                <label htmlFor="student-avatar-upload-curator" className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-primary">
+                  <ImagePlus className="h-4 w-4" /> Загрузить фото
+                  <input
+                    id="student-avatar-upload-curator"
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      try {
+                        await uploadStudentAvatar(student.id, file);
+                        window.location.reload();
+                      } catch (err) { alert("Ошибка загрузки фото"); }
+                    }}
+                  />
+                </label>
+                {student.avatar_url && (
+                  <button
+                    className="flex items-center gap-1 text-xs text-destructive hover:underline mt-1"
+                    onClick={async () => {
+                      try {
+                        await deleteStudentAvatar(student.id);
+                        window.location.reload();
+                      } catch (err) { alert("Ошибка удаления фото"); }
+                    }}
+                  >
+                    <Trash2 className="h-3 w-3" /> Удалить фото
+                  </button>
+                )}
+              </div>
+            </div>
           </DialogTitle>
-          <div className="flex gap-4 text-sm text-muted-foreground pt-1 flex-wrap">
-            {student.last_ent_score != null && (
-              <span className="flex items-center gap-1">
-                <BookOpen className="h-3.5 w-3.5" />
-                Общий балл ЕНТ: <strong className="text-foreground ml-0.5">{student.last_ent_score}</strong>
-              </span>
-            )}
-            {student.parent_name && (
-              <span className="flex items-center gap-1"><Users className="h-3.5 w-3.5" />{student.parent_name}</span>
-            )}
-            {student.parent_phone && (
-              <span className="flex items-center gap-1"><Phone className="h-3.5 w-3.5" />{formatPhone(student.parent_phone)}</span>
-            )}
-          </div>
         </DialogHeader>
 
         {loading ? (
@@ -1213,7 +1253,10 @@ export default function CuratorshipPage() {
                         onClick={() => setSelectedStudent(s)}
                       >
                         <TableCell className="text-muted-foreground text-sm">{i + 1}</TableCell>
-                        <TableCell className="font-medium">{s.full_name}</TableCell>
+                        <TableCell className="font-medium flex items-center gap-2">
+                          <UserAvatar user={s} size="sm" />
+                          {s.full_name}
+                        </TableCell>
                         <TableCell><Badge variant="outline" className="text-xs">{s.group_name}</Badge></TableCell>
                         <TableCell>
                           {s.last_ent_score != null ? (
@@ -1276,7 +1319,10 @@ export default function CuratorshipPage() {
                       <TableRow key={fb.id}>
                         <TableCell className="text-sm font-mono whitespace-nowrap">{fb.date}</TableCell>
                         <TableCell>
-                          <p className="font-medium text-sm">{fb.student_name}</p>
+                          <div className="flex items-center gap-2">
+                            <UserAvatar user={fb} size="xs" />
+                            <p className="font-medium text-sm">{fb.student_name}</p>
+                          </div>
                           {fb.group_name && <Badge variant="outline" className="text-xs mt-0.5">{fb.group_name}</Badge>}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground max-w-xs">{fb.notes || "—"}</TableCell>
@@ -1388,7 +1434,10 @@ export default function CuratorshipPage() {
                               }
                             </TableCell>
                             <TableCell className={`font-medium text-sm ${isDone ? "line-through text-muted-foreground" : ""}`}>
-                              {t.full_name}
+                              <span className="flex items-center gap-2">
+                                <UserAvatar user={t} size="xs" />
+                                {t.full_name}
+                              </span>
                             </TableCell>
                             <TableCell><Badge variant="outline" className="text-xs">{t.group_name}</Badge></TableCell>
                             <TableCell className="text-sm">{t.parent_name || <span className="text-muted-foreground text-xs">—</span>}</TableCell>

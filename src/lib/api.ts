@@ -1,3 +1,17 @@
+// ====================== STUDENT AVATAR ======================
+export async function uploadStudentAvatar(studentId: string | number, file: File) {
+  const fd = new FormData();
+  fd.append("avatar", file);
+  const res = await fetch(`${API_BASE}/students/${studentId}/avatar`, { method: "POST", body: fd });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteStudentAvatar(studentId: string | number) {
+  const res = await fetch(`${API_BASE}/students/${studentId}/avatar`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
 // Базовый URL API:
 // - в проде на Netlify удобнее ходить на same-origin `/api` (Netlify proxy/redirect)
 // - при необходимости можно переопределить через VITE_API_URL
