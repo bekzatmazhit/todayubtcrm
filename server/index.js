@@ -1,3 +1,32 @@
+// --- SPA fallback: отдаём index.html для всех не-API путей (чтобы работал client-side routing) ---
+import { fileURLToPath } from "url";
+import path from "path";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const clientDist = path.join(__dirname, "../dist");
+import fs from "fs";
+
+// Статические файлы фронта
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+}
+
+// После всех API-роутов:
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith("/api/")) return next();
+  if (fs.existsSync(path.join(clientDist, "index.html"))) {
+    res.sendFile(path.join(clientDist, "index.html"));
+  } else {
+    res.status(404).send("index.html not found");
+  }
+});
+// Информативный ответ для GET /login (чтобы не было ошибки при открытии в браузере)
+app.get("/login", (req, res) => {
+  res.status(200).send("Login API endpoint. Use POST with email and password.");
+});
+// Информативный ответ для GET /api/login (чтобы не было ошибки при открытии в браузере)
+app.get("/api/login", (req, res) => {
+  res.status(200).send("Login API endpoint. Use POST with email and password.");
+});
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
