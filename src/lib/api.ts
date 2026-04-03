@@ -299,6 +299,16 @@ export async function createQuiz(data: {
   return await res.json();
 }
 
+export async function fetchQuizzes(params?: { group_id?: number; subject_id?: number; student_id?: number }) {
+  const q = new URLSearchParams();
+  if (params?.group_id) q.set("group_id", String(params.group_id));
+  if (params?.subject_id) q.set("subject_id", String(params.subject_id));
+  if (params?.student_id) q.set("student_id", String(params.student_id));
+  const res = await fetch(`${API_BASE}/quizzes?${q}`, defaultOptions);
+  if (!res.ok) throw new Error("Failed to fetch quizzes");
+  return await res.json();
+}
+
 export async function fetchStudents() {
   try {
     const res = await fetch(`${API_BASE}/students`, defaultOptions);
@@ -370,7 +380,7 @@ export async function createStudent(data: Record<string, unknown>) {
 
 export interface ScheduleEntry {
   id: number;
-  group_id: number;
+  group_id: number | null;
   subject_id: number;
   teacher_id: number;
   room_id: number;
@@ -383,15 +393,19 @@ export interface ScheduleEntry {
   start_time: string;
   end_time: string;
   time_label: string;
+  custom_label?: string;
+  student_ids?: number[];
 }
 
 export interface ScheduleConflict {
-  type: "teacher" | "room";
-  id: number;
-  group_name: string;
-  subject_name: string;
+  type: "teacher" | "room" | "student" | "group";
+  id?: number;
+  group_name?: string;
+  subject_name?: string;
   teacher_name?: string;
   room_name?: string;
+  student_name?: string;
+  message?: string;
 }
 
 export async function fetchSchedule(teacherId?: string): Promise<ScheduleEntry[]> {
@@ -408,7 +422,16 @@ export async function fetchSchedule(teacherId?: string): Promise<ScheduleEntry[]
   }
 }
 
-export async function createScheduleEntry(data: Omit<ScheduleEntry, "id" | "group_name" | "subject_name" | "teacher_name" | "room_name" | "start_time" | "end_time" | "time_label">) {
+export async function createScheduleEntry(data: {
+  group_id?: number | null;
+  subject_id: number;
+  teacher_id: number;
+  room_id: number;
+  time_slot_id: number;
+  cycle: string;
+  student_ids?: number[];
+  custom_label?: string;
+}) {
   const res = await fetch(`${API_BASE}/schedule`, {
     ...defaultOptions,
     method: "POST",
@@ -420,7 +443,16 @@ export async function createScheduleEntry(data: Omit<ScheduleEntry, "id" | "grou
   return json;
 }
 
-export async function updateScheduleEntry(id: number, data: Omit<ScheduleEntry, "id" | "group_name" | "subject_name" | "teacher_name" | "room_name" | "start_time" | "end_time" | "time_label">) {
+export async function updateScheduleEntry(id: number, data: {
+  group_id?: number | null;
+  subject_id: number;
+  teacher_id: number;
+  room_id: number;
+  time_slot_id: number;
+  cycle: string;
+  student_ids?: number[];
+  custom_label?: string;
+}) {
   const res = await fetch(`${API_BASE}/schedule/${id}`, {
     ...defaultOptions,
     method: "PUT",

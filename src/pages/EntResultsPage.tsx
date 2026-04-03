@@ -323,7 +323,7 @@ function RealEntImportDialog({ open, onOpenChange, groups, onSuccess }: {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[92vh] flex flex-col p-0 gap-0">
+      <DialogContent className="max-w-[95vw] sm:max-w-3xl max-h-[92vh] flex flex-col p-0 gap-0">
         {/* Header */}
         <div className="px-6 pt-5 pb-4 border-b flex items-start justify-between gap-3">
           <div>

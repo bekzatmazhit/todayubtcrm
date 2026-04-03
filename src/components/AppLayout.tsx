@@ -10,6 +10,8 @@ import { GlobalContextMenu } from "@/components/GlobalContextMenu";
 import { CommandPalette } from "@/components/CommandPalette";
 import { LogoutConfirmation } from "@/components/LogoutConfirmation";
 import { AdminBanner } from "@/components/AdminBanner";
+import { MobileBottomNav } from "@/components/MobileBottomNav";
+import { PwaInstallPrompt } from "@/components/PwaInstallPrompt";
 import { Command } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -50,11 +52,13 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
           </header>
           <AdminBanner />
-          <main className="flex-1 overflow-auto p-3 md:p-6">
+          <main className="flex-1 overflow-auto p-3 md:p-6 pb-20 md:pb-6">
             {children}
           </main>
         </div>
       </div>
+      <MobileBottomNav />
+      <PwaInstallPrompt />
       <GlobalContextMenu />
       <CommandPalette onLogout={requestLogout} />
       <LogoutConfirmation open={logoutOpen} onOpenChange={setLogoutOpen} onConfirm={confirmLogout} />

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Calendar, Users, BarChart3, Shield, ListTodo, FolderOpen,
@@ -47,8 +47,8 @@ export function CommandPalette({ onLogout }: { onLogout: () => void }) {
     }
 
     const cmds: PaletteAction[] = [
-      { id: "cmd-search-student", label: "Найти ученика...", category: "Действия", icon: <Search className="h-4 w-4" />, keywords: "поиск найти ученика search student", action: () => navigate("/students") },
-      { id: "cmd-new-task", label: "Создать новую Задачу", category: "Действия", icon: <ListTodo className="h-4 w-4" />, keywords: "создать задача new task создать задачу", action: () => navigate("/tasks") },
+      { id: "cmd-search-student", label: "Найти ученика...", category: "Действия", icon: <Search className="h-4 w-4" />, keywords: "поиск найти ученика search student", action: () => navigate("/students?focus=search") },
+      { id: "cmd-new-task", label: "Создать новую Задачу", category: "Действия", icon: <ListTodo className="h-4 w-4" />, keywords: "создать задача new task создать задачу", action: () => navigate("/tasks?action=create") },
       { id: "cmd-logout", label: "Выйти из аккаунта", category: "Система", icon: <LogOut className="h-4 w-4" />, keywords: "выйти logout exit выход", action: onLogout },
     ];
 
@@ -139,6 +139,7 @@ export function CommandPalette({ onLogout }: { onLogout: () => void }) {
   return (
     <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setQuery(""); }}>
       <DialogContent className="max-w-lg p-0 gap-0 overflow-hidden rounded-xl border shadow-2xl [&>button]:hidden" onKeyDown={handleKeyDown}>
+        <DialogTitle className="sr-only">Палитра команд</DialogTitle>
         {/* Search input */}
         <div className="flex items-center border-b px-3 gap-2">
           <Command className="h-4 w-4 text-muted-foreground shrink-0" />

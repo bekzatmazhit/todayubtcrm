@@ -6,7 +6,7 @@ import { ClassManagementModal } from "@/components/ClassManagementModal";
 import ScheduleConstructor from "@/components/ScheduleConstructor";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { useAuth } from "@/contexts/AuthContext";
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, X, Settings2, PanelRightClose, PanelRightOpen, CheckCircle2, Circle, ListTodo, Download, Users as UsersIcon, ClipboardCheck } from "lucide-react";
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, X, Settings2, PanelRightClose, PanelRightOpen, CheckCircle2, Circle, ListTodo, Download, Users as UsersIcon, ClipboardCheck, StickyNote } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -108,58 +108,56 @@ export default function CalendarPage() {
   const [adhocGroupFilter, setAdhocGroupFilter] = useState<string>("all");
   const [adhocAttendanceModal, setAdhocAttendanceModal] = useState<any>(null);
 
-  // Load lessons from API on mount
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        // For teachers, fetch only their lessons; for others, fetch all
-        const teacherId = user?.role === "teacher" ? user.id : undefined;
-        const [data, slots, notesFromDB] = await Promise.all([
-          fetchLessons(teacherId),
-          fetchTimeSlots(),
-          user?.id ? fetchNotes(parseInt(user.id)) : Promise.resolve([]),
-        ]);
-        // Transform API data to match Lesson interface
-        const transformed = data.map((item: any) => ({
-          id: `lesson-${item.id}`,
-          group_id: item.group_id,
-          subject_id: item.subject_id,
-          teacher_id: item.teacher_id,
-          time_slot: item.start_time,
-          room: item.room_name,
-          group_name: item.group_name,
-          subject: item.subject_name,
-          teacher_name: item.teacher_name,
-          students: item.students.map((s: any) => ({
-            id: `s-${s.id}`,
-            full_name: s.full_name,
-            attendance: "present",
-            lateness: "on_time",
-            homework: "done",
-            comment: "",
-          })),
-          cycle: item.cycle,
-          dates: item.dates,
-        }));
-        setAllLessons(transformed);
+  // Load lessons from API
+  const loadCalendarData = useCallback(async () => {
+    try {
+      // For teachers, fetch only their lessons; for others, fetch all
+      const teacherId = user?.role === "teacher" ? user.id : undefined;
+      const [data, slots, notesFromDB] = await Promise.all([
+        fetchLessons(teacherId),
+        fetchTimeSlots(),
+        user?.id ? fetchNotes(parseInt(user.id)) : Promise.resolve([]),
+      ]);
+      // Transform API data to match Lesson interface
+      const transformed = data.map((item: any) => ({
+        id: `lesson-${item.id}`,
+        group_id: item.group_id,
+        subject_id: item.subject_id,
+        teacher_id: item.teacher_id,
+        time_slot: item.start_time,
+        room: item.room_name,
+        group_name: item.group_name,
+        subject: item.subject_name,
+        teacher_name: item.teacher_name,
+        students: item.students.map((s: any) => ({
+          id: `s-${s.id}`,
+          full_name: s.full_name,
+          attendance: "present",
+          lateness: "on_time",
+          homework: "done",
+          comment: "",
+        })),
+        cycle: item.cycle,
+        dates: item.dates,
+      }));
+      setAllLessons(transformed);
 
-        const uniqueTimeSlots = [...new Set(transformed.map((l: any) => l.time_slot))].sort();
-        const uniqueRooms = [...new Set(transformed.map((l: any) => l.room))];
-        setTIME_SLOTS(uniqueTimeSlots);
-        setROOMS(uniqueRooms);
-        setAllTimeSlots(slots);
-        setNotes(notesFromDB);
-        setNewNote({ title: "", description: "", time_slot: "", date: "" });
+      const uniqueTimeSlots = [...new Set(transformed.map((l: any) => l.time_slot))].sort();
+      const uniqueRooms = [...new Set(transformed.map((l: any) => l.room))];
+      setTIME_SLOTS(uniqueTimeSlots);
+      setROOMS(uniqueRooms);
+      setAllTimeSlots(slots);
+      setNotes(notesFromDB);
+      setNewNote({ title: "", description: "", time_slot: "", date: "" });
+    } catch (error) {
+      console.error("Error loading lessons:", error);
+      toast.error(t("Failed to load schedule"));
+    } finally {
+      setLoading(false);
+    }
+  }, [user, t]);
 
-      } catch (error) {
-        console.error("Error loading lessons:", error);
-        toast.error(t("Failed to load schedule"));
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadData();
-  }, [user, t, toast]);
+  useEffect(() => { loadCalendarData(); }, [loadCalendarData]);
 
   // Load tasks
   const loadTasksData = useCallback(async () => {
@@ -249,8 +247,9 @@ export default function CalendarPage() {
   
   const adhocConflicts = useMemo(() => {
     if (!adhocForm.time_slot || !adhocForm.end_time || selectedStudentIds.length === 0) return [];
-    const startA = adhocForm.time_slot;
-    const endA = adhocForm.end_time;
+    const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+    const startA = toMin(adhocForm.time_slot);
+    const endA = toMin(adhocForm.end_time);
     if (startA >= endA) return [];
     const selectedStudents = allStudents.filter((s: any) => selectedStudentIds.includes(s.id));
     const groupIds = [...new Set(selectedStudents.map((s: any) => s.group_id).filter(Boolean))] as number[];
@@ -261,7 +260,7 @@ export default function CalendarPage() {
         const startB = lesson.time_slot;
         const slot = allTimeSlots.find(ts => ts.start_time === startB);
         const endB = slot?.end_time || startB;
-        if (startA < endB && startB < endA) {
+        if (startA < toMin(endB) && endA > toMin(startB)) {
           const groupName = selectedStudents.find((s: any) => s.group_id === groupId)?.group_name || `Группа ${groupId}`;
           if (!conflicts.some(c => c.group_name === groupName && c.time === `${startB}–${endB}`)) {
             conflicts.push({ group_name: groupName, subject: lesson.subject || "—", time: `${startB}–${endB}` });
@@ -605,8 +604,8 @@ export default function CalendarPage() {
             <TooltipProvider delayDuration={200}>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={() => openAddNote()}>
-                    <Plus className="h-4 w-4" />
+                  <Button variant="outline" size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={() => openAddNote()}>
+                    <StickyNote className="h-4 w-4" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>{t("Add Note")}</TooltipContent>
@@ -665,7 +664,7 @@ export default function CalendarPage() {
 
       {/* Schedule Constructor for admin */}
       {showConstructor && user?.role === "admin" ? (
-        <ScheduleConstructor onClose={() => { setShowConstructor(false); /* reload lessons */ window.location.reload(); }} />
+        <ScheduleConstructor onClose={() => { setShowConstructor(false); loadCalendarData(); }} />
       ) : (
       <>
 
@@ -872,13 +871,13 @@ export default function CalendarPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {TIME_SLOTS.map((slot) => (
-                    <tr key={slot}>
+                  {activeTimeSlotsToday.map((slotObj) => (
+                    <tr key={slotObj.id}>
                       <td className="sticky left-0 z-10 bg-card p-3 text-sm font-medium text-foreground border-b border-r border-border whitespace-nowrap">
-                        {slot}
+                        {slotObj.start_time} – {slotObj.end_time}
                       </td>
                       {ROOMS.map((room) => {
-                        const lesson = getLessonForCell(slot, room);
+                        const lesson = getLessonForCell(slotObj.start_time, room);
                         return (
                           <td key={room} className="p-1.5 border-b border-r border-border">
                             {lesson ? (
@@ -1307,6 +1306,15 @@ export default function CalendarPage() {
         onOpenChange={setModalOpen}
         date={selectedLessonDate}
         onSaved={handleAttendanceSaved}
+        onStudentArchived={(studentId, groupId) => {
+          setAllLessons((prev) =>
+            prev.map((l) =>
+              l.group_id === groupId
+                ? { ...l, students: l.students.filter((s: any) => s.id !== studentId) }
+                : l
+            )
+          );
+        }}
       />
 
       {/* Ad-hoc lesson creation modal */}

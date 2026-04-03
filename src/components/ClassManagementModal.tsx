@@ -19,9 +19,10 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   date?: string; // YYYY-MM-DD
   onSaved?: (info: { schedule_id: number | null; date: string }) => void;
+  onStudentArchived?: (studentId: string, groupId: number | undefined) => void;
 }
 
-export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved }: Props) {
+export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved, onStudentArchived }: Props) {
   const [students, setStudents] = useState<Student[]>([]);
   const [saving, setSaving] = useState(false);
   const { t } = useTranslation();
@@ -129,6 +130,7 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
     try {
       await archiveStudent(numericId);
       setStudents((prev) => prev.filter((s) => s.id !== archiveTarget.id));
+      onStudentArchived?.(archiveTarget.id, (lesson as any)?.group_id);
       toast.success(`${archiveTarget.full_name} переведён в архив`);
     } catch {
       toast.error("Ошибка при архивировании");

@@ -15,6 +15,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@fontsource/pt-sans": "^5.2.8",
     "@hello-pangea/dnd": "^18.0.1",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "^1.2.11",
@@ -68,6 +69,8 @@
     "highlight.js": "^11.11.1",
     "i18next": "^25.8.18",
     "input-otp": "^1.4.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.462.0",
     "multer": "^2.1.1",

@@ -25,7 +25,7 @@ const navItems = [
   { titleKey: "Team", url: "/team", icon: UsersRound, roles: ["admin", "umo_head"] },
   { titleKey: "Tasks", url: "/tasks", icon: ListTodo, roles: ["admin", "umo_head", "teacher"] },
   { titleKey: "Storage", url: "/storage", icon: FolderOpen, roles: ["admin", "umo_head", "teacher"] },
-  { titleKey: "Grades", url: "/grades", icon: ClipboardCheck, roles: ["admin", "umo_head", "teacher"], disabled: true },
+  { titleKey: "Grades", url: "/grades", icon: ClipboardCheck, roles: ["admin", "umo_head", "teacher"] },
   { titleKey: "Broadcasts", url: "/broadcasts", icon: Megaphone, roles: ["admin", "umo_head", "teacher"] },
   { titleKey: "Chat", url: "/chat", icon: MessageCircle, roles: ["admin", "umo_head", "teacher"], disabled: true },
   { titleKey: "Dashboard", url: "/dashboard", icon: PieChart, roles: ["admin", "umo_head", "teacher"] },

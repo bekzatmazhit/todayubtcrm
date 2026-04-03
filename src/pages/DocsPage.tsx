@@ -26,6 +26,10 @@ import {
   FileText,
   Moon,
   Sun,
+  ClipboardCheck,
+  BarChart3,
+  Megaphone,
+  Smartphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/components/ThemeProvider";
@@ -38,6 +42,10 @@ const ICON_MAP: Record<string, React.ElementType> = {
   Calendar,
   ListTodo,
   Shield,
+  ClipboardCheck,
+  BarChart3,
+  Megaphone,
+  Smartphone,
 };
 
 interface TocItem {

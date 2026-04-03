@@ -459,3 +459,31 @@
   height: 0;
   font-style: italic;
 }
+
+/* ── PWA standalone mode adjustments ── */
+@media (display-mode: standalone) {
+  html {
+    /* Account for iOS safe areas */
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  /* Prevent pull-to-refresh and overscroll */
+  body {
+    overscroll-behavior-y: contain;
+  }
+  /* Prevent text selection on nav elements */
+  nav, [role="navigation"] {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+/* Mobile tap highlight cleanup */
+@media (max-width: 767px) {
+  button, a, [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Smoother scrolling on mobile */
+  .overflow-auto, .overflow-y-auto, .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+}

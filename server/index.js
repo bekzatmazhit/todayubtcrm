@@ -270,6 +270,7 @@ app.get("/api/schedule", (req, res) => {
     const { teacher_id } = req.query;
     let query = `
       SELECT s.id, s.group_id, s.subject_id, s.teacher_id, s.room_id, s.time_slot_id, s.cycle,
+             s.custom_label,
              g.name as group_name,
              subj.name as subject_name,
              u.name || ' ' || u.surname as teacher_name,
@@ -285,23 +286,47 @@ app.get("/api/schedule", (req, res) => {
     const params = [];
     if (teacher_id) { query += " WHERE s.teacher_id = ?"; params.push(parseInt(teacher_id)); }
     query += " ORDER BY ts.start_time, g.name";
-    res.json(db.prepare(query).all(...params));
+    const rows = db.prepare(query).all(...params);
+
+    // Attach student_ids for custom (non-group) entries
+    const stmtStudents = db.prepare("SELECT student_id FROM schedule_students WHERE schedule_id = ?");
+    const result = rows.map(r => ({
+      ...r,
+      student_ids: r.group_id ? [] : stmtStudents.all(r.id).map(s => s.student_id),
+    }));
+    res.json(result);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.post("/api/schedule", (req, res) => {
   try {
-    const { group_id, subject_id, teacher_id, room_id, time_slot_id, cycle } = req.body;
-    if (!group_id || !subject_id || !teacher_id || !room_id || !time_slot_id || !cycle)
-      return res.status(400).json({ error: "All fields are required" });
+    const { group_id, subject_id, teacher_id, room_id, time_slot_id, cycle, student_ids, custom_label } = req.body;
+    if (!subject_id || !teacher_id || !room_id || !time_slot_id || !cycle)
+      return res.status(400).json({ error: "subject_id, teacher_id, room_id, time_slot_id, cycle are required" });
+    if (!group_id && (!student_ids || student_ids.length === 0))
+      return res.status(400).json({ error: "Either group_id or student_ids[] required" });
 
-    // Conflict check
-    const conflicts = checkConflicts({ teacher_id, room_id, time_slot_id, cycle, group_id });
-    if (conflicts.length > 0) return res.status(409).json({ error: "Conflict detected", conflicts });
+    // Resolve actual student IDs for the conflict check
+    const resolvedStudentIds = group_id
+      ? db.prepare("SELECT id FROM students WHERE group_id = ? AND status = 'active'").all(group_id).map(s => s.id)
+      : student_ids;
+
+    // Per-student + teacher conflict check (time overlap)
+    const conflicts = checkConflicts({ teacher_id, time_slot_id, cycle, group_id, student_ids: resolvedStudentIds });
+    if (conflicts.length > 0) {
+      const msg = conflicts.map(c => c.message).join("\n");
+      return res.status(409).json({ error: msg, conflicts });
+    }
 
     const result = db.prepare(
-      "INSERT INTO schedule (group_id, subject_id, teacher_id, room_id, time_slot_id, cycle) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run(group_id, subject_id, teacher_id, room_id, time_slot_id, cycle);
+      "INSERT INTO schedule (group_id, subject_id, teacher_id, room_id, time_slot_id, cycle, custom_label) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).run(group_id || null, subject_id, teacher_id, room_id, time_slot_id, cycle, custom_label || null);
+
+    // Insert custom student assignments if no group
+    if (!group_id && student_ids && student_ids.length > 0) {
+      const insert = db.prepare("INSERT INTO schedule_students (schedule_id, student_id) VALUES (?, ?)");
+      for (const sid of student_ids) insert.run(result.lastInsertRowid, sid);
+    }
 
     const created = db.prepare(`
       SELECT s.*, g.name as group_name, subj.name as subject_name,
@@ -314,23 +339,43 @@ app.post("/api/schedule", (req, res) => {
       WHERE s.id = ?
     `).get(result.lastInsertRowid);
 
-    logAction(req, { action: "create", entityType: "schedule", entityId: result.lastInsertRowid, entityName: created?.group_name + ' / ' + created?.subject_name });
-    res.json(created);
+    // Attach student_ids to response
+    const sids = !group_id
+      ? db.prepare("SELECT student_id FROM schedule_students WHERE schedule_id = ?").all(result.lastInsertRowid).map(s => s.student_id)
+      : [];
+
+    const label = created?.group_name || created?.custom_label || 'Сводная группа';
+    logAction(req, { action: "create", entityType: "schedule", entityId: result.lastInsertRowid, entityName: label + ' / ' + created?.subject_name });
+    res.json({ ...created, student_ids: sids });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.put("/api/schedule/:id", (req, res) => {
   try {
-    const { group_id, subject_id, teacher_id, room_id, time_slot_id, cycle } = req.body;
+    const { group_id, subject_id, teacher_id, room_id, time_slot_id, cycle, student_ids, custom_label } = req.body;
     const id = parseInt(req.params.id);
 
-    // Conflict check excluding current entry
-    const conflicts = checkConflicts({ teacher_id, room_id, time_slot_id, cycle, exclude_id: id, group_id });
-    if (conflicts.length > 0) return res.status(409).json({ error: "Conflict detected", conflicts });
+    const resolvedStudentIds = group_id
+      ? db.prepare("SELECT id FROM students WHERE group_id = ? AND status = 'active'").all(group_id).map(s => s.id)
+      : (student_ids || []);
+
+    // Conflict check excluding current entry (time overlap)
+    const conflicts = checkConflicts({ teacher_id, time_slot_id, cycle, exclude_id: id, group_id, student_ids: resolvedStudentIds });
+    if (conflicts.length > 0) {
+      const msg = conflicts.map(c => c.message).join("\n");
+      return res.status(409).json({ error: msg, conflicts });
+    }
 
     db.prepare(
-      "UPDATE schedule SET group_id=?, subject_id=?, teacher_id=?, room_id=?, time_slot_id=?, cycle=? WHERE id=?"
-    ).run(group_id, subject_id, teacher_id, room_id, time_slot_id, cycle, id);
+      "UPDATE schedule SET group_id=?, subject_id=?, teacher_id=?, room_id=?, time_slot_id=?, cycle=?, custom_label=? WHERE id=?"
+    ).run(group_id || null, subject_id, teacher_id, room_id, time_slot_id, cycle, custom_label || null, id);
+
+    // Rebuild custom student assignments
+    db.prepare("DELETE FROM schedule_students WHERE schedule_id = ?").run(id);
+    if (!group_id && student_ids && student_ids.length > 0) {
+      const insert = db.prepare("INSERT INTO schedule_students (schedule_id, student_id) VALUES (?, ?)");
+      for (const sid of student_ids) insert.run(id, sid);
+    }
 
     const updated = db.prepare(`
       SELECT s.*, g.name as group_name, subj.name as subject_name,
@@ -343,14 +388,28 @@ app.put("/api/schedule/:id", (req, res) => {
       WHERE s.id = ?
     `).get(id);
 
-    logAction(req, { action: "update", entityType: "schedule", entityId: id, entityName: updated?.group_name + ' / ' + updated?.subject_name });
-    res.json(updated);
+    const sids = !group_id
+      ? db.prepare("SELECT student_id FROM schedule_students WHERE schedule_id = ?").all(id).map(s => s.student_id)
+      : [];
+
+    logAction(req, { action: "update", entityType: "schedule", entityId: id, entityName: (updated?.group_name || updated?.custom_label || 'Сводная') + ' / ' + updated?.subject_name });
+    res.json({ ...updated, student_ids: sids });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.delete("/api/schedule/:id", (req, res) => {
   try {
+    // Get the time_slot_id before deleting
+    const entry = db.prepare("SELECT time_slot_id FROM schedule WHERE id = ?").get(req.params.id);
     db.prepare("DELETE FROM schedule WHERE id = ?").run(req.params.id);
+    // Clean up orphan custom time_slots (no label = custom) that are no longer referenced
+    if (entry) {
+      const slot = db.prepare("SELECT id, label FROM time_slots WHERE id = ?").get(entry.time_slot_id);
+      if (slot && !slot.label) {
+        const refs = db.prepare("SELECT COUNT(*) as cnt FROM schedule WHERE time_slot_id = ?").get(slot.id);
+        if (refs.cnt === 0) db.prepare("DELETE FROM time_slots WHERE id = ?").run(slot.id);
+      }
+    }
     logAction(req, { action: "delete", entityType: "schedule", entityId: Number(req.params.id) });
     res.json({ success: true });
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -364,38 +423,25 @@ app.patch("/api/schedule/:id/move", (req, res) => {
     if (!teacher_id || !time_slot_id || !cycle)
       return res.status(400).json({ error: "Требуются teacher_id, time_slot_id и cycle" });
 
-    // Get current entry to find its group
+    // Get current entry
     const current = db.prepare("SELECT group_id FROM schedule WHERE id = ?").get(id);
     if (!current) return res.status(404).json({ error: "Entry not found" });
 
-    // Check for teacher conflict (exclude current entry)
-    const teacherConflict = db.prepare(`
-      SELECT s.id, g.name as group_name, subj.name as subject_name
-      FROM schedule s
-      LEFT JOIN groups g ON s.group_id = g.id
-      LEFT JOIN subjects subj ON s.subject_id = subj.id
-      WHERE s.teacher_id = ? AND s.time_slot_id = ? AND s.cycle = ? AND s.id != ?
-    `).get(teacher_id, time_slot_id, cycle, id);
+    // Resolve student IDs for this entry
+    const resolvedStudentIds = current.group_id
+      ? db.prepare("SELECT id FROM students WHERE group_id = ? AND status = 'active'").all(current.group_id).map(s => s.id)
+      : db.prepare("SELECT student_id FROM schedule_students WHERE schedule_id = ?").all(id).map(s => s.student_id);
 
-    if (teacherConflict) {
-      return res.status(409).json({
-        error: `Учитель уже занят в это время (${teacherConflict.group_name} — ${teacherConflict.subject_name})`
-      });
-    }
-
-    // Check for group conflict (exclude current entry)
-    const groupConflict = db.prepare(`
-      SELECT s.id, g.name as group_name, subj.name as subject_name
-      FROM schedule s
-      LEFT JOIN groups g ON s.group_id = g.id
-      LEFT JOIN subjects subj ON s.subject_id = subj.id
-      WHERE s.group_id = ? AND s.time_slot_id = ? AND s.cycle = ? AND s.id != ?
-    `).get(current.group_id, time_slot_id, cycle, id);
-
-    if (groupConflict) {
-      return res.status(409).json({
-        error: `Группа уже занята в это время (${groupConflict.group_name} — ${groupConflict.subject_name})`
-      });
+    // Check for conflicts using time overlap formula
+    const conflicts = checkConflicts({
+      teacher_id, time_slot_id, cycle,
+      exclude_id: id,
+      group_id: current.group_id,
+      student_ids: resolvedStudentIds,
+    });
+    if (conflicts.length > 0) {
+      const msg = conflicts.map(c => c.message).join("\n");
+      return res.status(409).json({ error: msg, conflicts });
     }
 
     db.prepare("UPDATE schedule SET teacher_id = ?, time_slot_id = ?, cycle = ? WHERE id = ?")
@@ -419,15 +465,13 @@ app.patch("/api/schedule/:id/move", (req, res) => {
       teacher_id, 'schedule',
       'Изменение в расписании',
       updated
-        ? `Урок ${updated.group_name} — ${updated.subject_name} перенесён на ${updated.start_time}`
+        ? `Урок ${updated.group_name || updated.custom_label || 'Сводная группа'} — ${updated.subject_name} перенесён на ${updated.start_time}`
         : 'Ваше расписание было изменено',
       '/calendar'
     );
 
     res.json(updated);
   } catch (error) {
-    if (error.message && error.message.includes('UNIQUE constraint failed'))
-      return res.status(409).json({ error: "Учитель уже занят в это время" });
     res.status(500).json({ error: error.message });
   }
 });
@@ -459,43 +503,111 @@ app.post("/api/schedule/check-conflicts", (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-function checkConflicts({ teacher_id, time_slot_id, cycle, exclude_id, group_id }) {
+function checkConflicts({ teacher_id, time_slot_id, cycle, exclude_id, group_id, student_ids }) {
   const conflicts = [];
-  let excludeClause = "";
-  const params1 = [teacher_id, time_slot_id, cycle];
-  const params3 = group_id ? [group_id, time_slot_id, cycle] : null;
 
-  if (exclude_id) {
-    excludeClause = " AND s.id != ?";
-    params1.push(exclude_id);
-    if (params3) params3.push(exclude_id);
-  }
+  // Get the time range of the new lesson
+  const newSlot = db.prepare("SELECT start_time, end_time FROM time_slots WHERE id = ?").get(time_slot_id);
+  if (!newSlot) return conflicts;
 
-  // Teacher conflict: same teacher, same time slot, same cycle
-  const teacherConflicts = db.prepare(`
-    SELECT s.id, g.name as group_name, subj.name as subject_name, u.name || ' ' || u.surname as teacher_name
-    FROM schedule s
-    LEFT JOIN groups g ON s.group_id = g.id
-    LEFT JOIN subjects subj ON s.subject_id = subj.id
-    LEFT JOIN users u ON s.teacher_id = u.id
-    WHERE s.teacher_id = ? AND s.time_slot_id = ? AND s.cycle = ?${excludeClause}
-  `).all(...params1);
+  const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+  const newStart = toMin(newSlot.start_time);
+  const newEnd = toMin(newSlot.end_time);
+  if (newStart >= newEnd) return conflicts;
 
-  if (teacherConflicts.length > 0) {
-    conflicts.push(...teacherConflicts.map(c => ({ type: "teacher", ...c })));
-  }
+  const excludeClause = exclude_id ? " AND s.id != ?" : "";
 
-  // Group conflict: same group, same time slot, same cycle
-  if (params3) {
-    const groupConflicts = db.prepare(`
-      SELECT s.id, g.name as group_name, subj.name as subject_name
+  // Helper: find all overlapping schedule entries in the same cycle
+  const getOverlapping = (extraWhere, params) => {
+    const rows = db.prepare(`
+      SELECT s.id, s.group_id, s.custom_label, g.name as group_name, subj.name as subject_name,
+             u.name || ' ' || u.surname as teacher_name,
+             ts.start_time, ts.end_time
       FROM schedule s
       LEFT JOIN groups g ON s.group_id = g.id
       LEFT JOIN subjects subj ON s.subject_id = subj.id
-      WHERE s.group_id = ? AND s.time_slot_id = ? AND s.cycle = ?${excludeClause}
-    `).all(...params3);
-    if (groupConflicts.length > 0) {
-      conflicts.push(...groupConflicts.map(c => ({ type: "group", ...c })));
+      LEFT JOIN users u ON s.teacher_id = u.id
+      LEFT JOIN time_slots ts ON s.time_slot_id = ts.id
+      WHERE s.cycle = ? ${extraWhere}${excludeClause}
+    `).all(...params, ...(exclude_id ? [exclude_id] : []));
+    return rows.filter(c => {
+      if (!c.start_time || !c.end_time) return false;
+      return newStart < toMin(c.end_time) && newEnd > toMin(c.start_time);
+    });
+  };
+
+  // 1) Teacher conflict: same teacher, overlapping time
+  if (teacher_id) {
+    const hits = getOverlapping("AND s.teacher_id = ?", [cycle, teacher_id]);
+    for (const c of hits) {
+      conflicts.push({
+        type: "teacher", ...c,
+        message: `Конфликт: У преподавателя ${c.teacher_name} уже стоит занятие «${c.subject_name}» (${c.group_name || c.custom_label || 'Сводная'}) с ${c.start_time} до ${c.end_time}`
+      });
+    }
+  }
+  if (conflicts.length > 0) return conflicts; // early return
+
+  // 2) Per-student conflict: check every student in this lesson
+  if (student_ids && student_ids.length > 0) {
+    // Get all OTHER schedule entries that overlap in time in this cycle
+    const overlapping = getOverlapping("", [cycle]);
+    if (overlapping.length > 0) {
+      const overlapIds = overlapping.map(o => o.id);
+      const placeholders = overlapIds.map(() => "?").join(",");
+
+      // Students in overlapping group-based entries
+      const groupBased = overlapping.filter(o => o.group_id);
+      // Students in overlapping custom entries (schedule_students)
+      const customBased = overlapping.filter(o => !o.group_id);
+
+      // Build a map: student_id → conflicting entry
+      const busyStudents = new Map();
+
+      for (const entry of groupBased) {
+        const groupStudents = db.prepare("SELECT id FROM students WHERE group_id = ? AND status = 'active'").all(entry.group_id);
+        for (const gs of groupStudents) {
+          busyStudents.set(gs.id, entry);
+        }
+      }
+
+      if (customBased.length > 0) {
+        const customIds = customBased.map(o => o.id);
+        const cp = customIds.map(() => "?").join(",");
+        const customStudents = db.prepare(`SELECT schedule_id, student_id FROM schedule_students WHERE schedule_id IN (${cp})`).all(...customIds);
+        for (const cs of customStudents) {
+          busyStudents.set(cs.student_id, customBased.find(o => o.id === cs.schedule_id));
+        }
+      }
+
+      // Check each student
+      for (const sid of student_ids) {
+        const conflict = busyStudents.get(sid);
+        if (conflict) {
+          const student = db.prepare("SELECT full_name, group_id FROM students WHERE id = ?").get(sid);
+          const groupName = student?.group_id
+            ? db.prepare("SELECT name FROM groups WHERE id = ?").get(student.group_id)?.name
+            : null;
+          conflicts.push({
+            type: "student",
+            student_id: sid,
+            student_name: student?.full_name,
+            schedule_id: conflict.id,
+            message: `Конфликт: Ученик ${student?.full_name}${groupName ? ` (${groupName})` : ''} уже занят на уроке «${conflict.subject_name}» с ${conflict.start_time} до ${conflict.end_time}`
+          });
+        }
+      }
+    }
+  }
+
+  // 3) Group conflict (backward compat): same whole group, overlapping time
+  if (group_id && conflicts.length === 0) {
+    const hits = getOverlapping("AND s.group_id = ?", [cycle, group_id]);
+    for (const c of hits) {
+      conflicts.push({
+        type: "group", ...c,
+        message: `Конфликт: У группы ${c.group_name} уже есть урок «${c.subject_name}» с ${c.start_time} до ${c.end_time}`
+      });
     }
   }
 
@@ -509,6 +621,7 @@ app.get("/api/lessons", (req, res) => {
     const { teacher_id } = req.query;
     let query = `
       SELECT s.id, s.group_id, s.subject_id, s.teacher_id, s.room_id, s.time_slot_id, s.cycle,
+             s.custom_label,
              g.name as group_name, subj.name as subject_name,
              u.name || ' ' || u.surname as teacher_name,
              r.name as room_name,
@@ -526,23 +639,37 @@ app.get("/api/lessons", (req, res) => {
 
     const schedule = db.prepare(query).all(...params);
 
-    const studentsByGroup = db.prepare("SELECT id, full_name, group_id FROM students WHERE group_id = ?");
+    const studentsByGroup = db.prepare("SELECT id, full_name, group_id FROM students WHERE group_id = ? AND status = 'active'");
+    const studentsBySchedule = db.prepare(`
+      SELECT st.id, st.full_name, st.group_id
+      FROM schedule_students ss
+      JOIN students st ON ss.student_id = st.id
+      WHERE ss.schedule_id = ?
+    `);
 
-    const result = schedule.map(entry => ({
-      id: entry.id,
-      group_id: entry.group_id,
-      subject_id: entry.subject_id,
-      teacher_id: entry.teacher_id,
-      group_name: entry.group_name,
-      subject_name: entry.subject_name,
-      teacher_name: entry.teacher_name,
-      cycle: entry.cycle,
-      start_time: entry.start_time,
-      end_time: entry.end_time,
-      room_name: entry.room_name,
-      dates: generateLessonDates(entry.cycle),
-      students: studentsByGroup.all(entry.group_id),
-    }));
+    const result = schedule.map(entry => {
+      // If group_id is set, get all students from that group; otherwise get custom students
+      const students = entry.group_id
+        ? studentsByGroup.all(entry.group_id)
+        : studentsBySchedule.all(entry.id);
+
+      return {
+        id: entry.id,
+        group_id: entry.group_id,
+        subject_id: entry.subject_id,
+        teacher_id: entry.teacher_id,
+        group_name: entry.group_name || entry.custom_label || 'Сводная группа',
+        subject_name: entry.subject_name,
+        teacher_name: entry.teacher_name,
+        cycle: entry.cycle,
+        start_time: entry.start_time,
+        end_time: entry.end_time,
+        room_name: entry.room_name,
+        custom_label: entry.custom_label,
+        dates: generateLessonDates(entry.cycle),
+        students,
+      };
+    });
 
     res.json(result);
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -1149,17 +1276,19 @@ app.get("/api/quizzes", (req, res) => {
         UNIQUE(quiz_id, student_id)
       );
     `);
-    const { schedule_id, date, student_id } = req.query;
+    const { schedule_id, date, student_id, group_id, subject_id } = req.query;
     if (student_id) {
       const rows = db.prepare(`
         SELECT q.id, q.title, q.date, qr.score,
                u.name || ' ' || u.surname AS teacher_name,
-               subj.name AS subject_name
+               subj.name AS subject_name,
+               g.name AS group_name
         FROM quiz_results qr
         JOIN quizzes q ON qr.quiz_id = q.id
         LEFT JOIN users u ON q.created_by = u.id
         LEFT JOIN schedule sc ON q.schedule_id = sc.id
         LEFT JOIN subjects subj ON sc.subject_id = subj.id
+        LEFT JOIN groups g ON sc.group_id = g.id
         WHERE qr.student_id = ?
         ORDER BY q.date DESC, q.id DESC
       `).all(parseInt(student_id));
@@ -1169,9 +1298,28 @@ app.get("/api/quizzes", (req, res) => {
     let where = "WHERE 1=1";
     if (schedule_id) { where += " AND q.schedule_id = ?"; params.push(schedule_id); }
     if (date)        { where += " AND q.date = ?";        params.push(date); }
-    const quizzes = db.prepare(`SELECT q.id, q.title, q.date FROM quizzes q ${where} ORDER BY q.id DESC`).all(...params);
+    if (group_id)    { where += " AND sc.group_id = ?";   params.push(parseInt(group_id)); }
+    if (subject_id)  { where += " AND sc.subject_id = ?"; params.push(parseInt(subject_id)); }
+    const quizzes = db.prepare(`
+      SELECT q.id, q.title, q.date, q.created_at,
+             u.name || ' ' || u.surname AS teacher_name,
+             subj.name AS subject_name,
+             g.name AS group_name, sc.group_id
+      FROM quizzes q
+      LEFT JOIN users u ON q.created_by = u.id
+      LEFT JOIN schedule sc ON q.schedule_id = sc.id
+      LEFT JOIN subjects subj ON sc.subject_id = subj.id
+      LEFT JOIN groups g ON sc.group_id = g.id
+      ${where}
+      ORDER BY q.date DESC, q.id DESC
+    `).all(...params);
     for (const q of quizzes) {
-      q.results = db.prepare("SELECT student_id, score FROM quiz_results WHERE quiz_id = ?").all(q.id);
+      q.results = db.prepare(`
+        SELECT qr.student_id, qr.score, s.full_name AS student_name
+        FROM quiz_results qr
+        JOIN students s ON qr.student_id = s.id
+        WHERE qr.quiz_id = ?
+      `).all(q.id);
     }
     res.json(quizzes);
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -3152,6 +3300,17 @@ app.get("/api/users/:id/permissions", (req, res) => {
     res.json(perms.map(p => p.key));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ====================== SPA FALLBACK (production) ======================
+const distDir = path.join(__dirname, "..", "dist");
+if (fs.existsSync(distDir)) {
+  app.use(express.static(distDir));
+  app.use((req, res, next) => {
+    // Don't intercept API routes or uploads
+    if (req.method !== "GET" || req.path.startsWith("/api/") || req.path.startsWith("/uploads/")) return next();
+    res.sendFile(path.join(distDir, "index.html"));
+  });
+}
 
 // ====================== START ======================
 

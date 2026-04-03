@@ -189,7 +189,7 @@ function StudentDetailDialog({ student, onClose }: { student: any; onClose: () =
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-w-[95vw] sm:max-w-4xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
             <UserAvatar user={student} size="md" />
@@ -427,7 +427,7 @@ function StudentDetailDialog({ student, onClose }: { student: any; onClose: () =
                   <p className="text-sm">Прогулов не зафиксировано</p>
                 </div>
               ) : (
-                <div className="rounded-md border overflow-hidden">
+                <div className="rounded-md border overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -814,7 +814,7 @@ export default function CuratorshipPage() {
             </TabsList>
 
             <TabsContent value="groups">
-              <div className="rounded-md border overflow-hidden">
+              <div className="rounded-md border overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>

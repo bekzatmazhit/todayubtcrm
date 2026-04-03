@@ -85,17 +85,27 @@ export function initializeDatabase() {
 
     CREATE TABLE IF NOT EXISTS schedule (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      group_id     INTEGER NOT NULL,
+      group_id     INTEGER,
       subject_id   INTEGER NOT NULL,
       teacher_id   INTEGER NOT NULL,
       room_id      INTEGER NOT NULL,
       time_slot_id INTEGER NOT NULL,
       cycle        TEXT NOT NULL DEFAULT 'PSP',
+      custom_label TEXT,
       FOREIGN KEY(group_id)     REFERENCES groups(id),
       FOREIGN KEY(subject_id)   REFERENCES subjects(id),
       FOREIGN KEY(teacher_id)   REFERENCES users(id),
       FOREIGN KEY(room_id)      REFERENCES rooms(id),
       FOREIGN KEY(time_slot_id) REFERENCES time_slots(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS schedule_students (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      schedule_id INTEGER NOT NULL,
+      student_id  INTEGER NOT NULL,
+      FOREIGN KEY(schedule_id) REFERENCES schedule(id) ON DELETE CASCADE,
+      FOREIGN KEY(student_id)  REFERENCES students(id),
+      UNIQUE(schedule_id, student_id)
     );
 
     CREATE TABLE IF NOT EXISTS students (
@@ -326,12 +336,13 @@ export function initializeDatabase() {
     );
   `);
 
-  // Unique index: one lesson per teacher per time slot per cycle (no double-booking)
-  try {
-    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_teacher_slot_cycle ON schedule(teacher_id, time_slot_id, cycle)`);
-  } catch (e) {
-    console.warn('⚠️ Could not add unique index on schedule:', e.message);
-  }
+  // Migration: drop old unique index (conflicts handled by checkConflicts now)
+  try { db.exec(`DROP INDEX IF EXISTS uniq_teacher_slot_cycle`); } catch {}
+
+  // Migration: add custom_label column to schedule if missing
+  try { db.exec(`ALTER TABLE schedule ADD COLUMN custom_label TEXT DEFAULT NULL`); } catch {}
+
+  // Migration: create schedule_students if it doesn't exist (idempotent via IF NOT EXISTS above)
 
   // Migrate: add icon column to storage tables
   try { db.exec(`ALTER TABLE storage_folders ADD COLUMN icon TEXT DEFAULT NULL`); } catch {}

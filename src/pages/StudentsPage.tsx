@@ -1,136 +1,609 @@
-import { Users, Filter, TrendingUp, Calendar, BookOpen, Search, Phone, GraduationCap, UserCheck, ArrowUpDown, Download, MessageSquare, Pencil, Save, X, ImagePlus, Trash2, MoreHorizontal } from "lucide-react";
+import { Users, Filter, Calendar, BookOpen, Search, Phone, GraduationCap, ArrowUpDown, MessageSquare, CheckCircle2, XCircle, Clock, BookX, Star, FileDown, BarChart3 } from "lucide-react";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Progress } from "@/components/ui/progress";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useState, useEffect, useMemo, useRef } from "react";
-import { useNavigate } from "react-router-dom";
-import { fetchStudents, fetchGroups, fetchStudent, updateStudent, fetchTeacherFeedbackByStudent, fetchParentFeedback, fetchLessonCommentsByStudent, uploadStudentAvatar, deleteStudentAvatar } from "@/lib/api";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
+import { fetchStudents, fetchGroups, fetchTeacherFeedbackByStudent, fetchLessonCommentsByStudent } from "@/lib/api";
 import { UserAvatar } from "@/components/UserAvatar";
 import { useAuth } from "@/contexts/AuthContext";
-import { formatPhone } from "@/lib/utils";
+import { formatPhone, cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
-interface Group {
-  id: number;
-  name: string;
-  curator_id?: number;
-}
-
+interface Group { id: number; name: string; curator_id?: number }
 interface Student {
-  id: number;
-  full_name: string;
-  phone?: string;
-  parent_phone?: string;
-  parent_name?: string;
-  group_id?: number;
-  group_name?: string;
-  attendance_rate?: number | null;
-  last_ent_score?: number | null;
-  status?: string;
+  id: number; full_name: string; phone?: string; parent_phone?: string; parent_name?: string;
+  group_id?: number; group_name?: string; attendance_rate?: number | null; last_ent_score?: number | null;
+  status?: string; avatar_url?: string | null;
 }
-
-interface EntResult {
-  score: number;
-  month: string;
-  subject_name: string;
-}
-
-interface StudentDetails extends Student {
-  avatar_url?: string | null;
-  attendance_stats?: {
-    total_lessons: number;
-    present_count: number;
-    absent_count: number;
-    late_count: number;
-    attendance_rate: number;
-  };
-  recent_attendance?: Array<{
-    status: string;
-    lateness: string;
-    homework: string;
-    comment?: string;
-    date: string;
-    subject_name: string;
-  }>;
-  ent_results?: EntResult[];
-}
-
 type SortKey = "full_name" | "group_name" | "attendance_rate" | "last_ent_score";
 
-type CommentFilter = "all" | "month";
+const API_BASE = (import.meta as any).env?.VITE_API_URL || "/api";
+
+const MONTH_OPTIONS = [
+  { value: "2025-09", label: "Сент 2025" }, { value: "2025-10", label: "Окт 2025" },
+  { value: "2025-11", label: "Нояб 2025" }, { value: "2025-12", label: "Дек 2025" },
+  { value: "2026-01", label: "Янв 2026" }, { value: "2026-02", label: "Фев 2026" },
+  { value: "2026-03", label: "Март 2026" }, { value: "2026-04", label: "Апр 2026" },
+  { value: "2026-05", label: "Май 2026" },
+];
+
+async function fetchStudent360(id: number) {
+  const token = localStorage.getItem("token");
+  const res = await fetch(`${API_BASE}/student-360/${id}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error("Failed");
+  return res.json();
+}
+
+function getMonthRange(month: string) {
+  const [yStr, mStr] = month.split("-");
+  const y = Number(yStr); const m = Number(mStr);
+  if (!y || !m) return null;
+  return { from: `${month}-01`, to: `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}` };
+}
+
+/* ═══════ 360 PANEL ═══════ */
+function Student360Panel({ data, month, teacherFeedback, lessonComments, loading }: {
+  data: any; month: string; teacherFeedback: any[]; lessonComments: any[]; loading: boolean;
+}) {
+  const [avatarError, setAvatarError] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  // Reset avatar error when data changes
+  useEffect(() => { setAvatarError(false); }, [data?.id]);
+
+  if (loading) return (
+    <div className="space-y-4 p-1">
+      <div className="flex gap-3"><Skeleton className="h-14 w-14 rounded-xl shrink-0" /><div className="flex-1 space-y-2"><Skeleton className="h-5 w-40" /><Skeleton className="h-3 w-56" /></div></div>
+      {[1,2,3,4,5].map(i => <Skeleton key={i} className="h-20 rounded-lg" />)}
+    </div>
+  );
+
+  if (!data) return <div className="text-center py-12 text-muted-foreground text-sm">Профиль не найден</div>;
+
+  const s = data;
+  const h = s.hero || {};
+  const initials = s.full_name?.split(" ").map((w: string) => w[0]).slice(0, 2).join("") ?? "";
+
+  // Filter attendance records by month
+  const range = getMonthRange(month);
+  const monthRecords: any[] = (s.attendance?.records ?? []).filter((r: any) => {
+    if (!range || !r.date) return false;
+    return r.date >= range.from && r.date <= range.to;
+  });
+
+  // Filter ENT by month
+  const entMonth = (s.ent?.byMonth ?? []).find((m: any) => m.month === month);
+
+  // Attendance stats for month
+  const monthPresent = monthRecords.filter((r: any) => r.status === "present").length;
+  const monthAbsent = monthRecords.filter((r: any) => r.status === "absent").length;
+  const monthLate = monthRecords.filter((r: any) => r.lateness === "late").length;
+  const monthHwDone = monthRecords.filter((r: any) => r.homework === "done").length;
+  const monthHwPartial = monthRecords.filter((r: any) => r.homework === "partial").length;
+  const monthHwNotDone = monthRecords.filter((r: any) => r.homework !== "done" && r.homework !== "partial").length;
+  const monthTotal = monthRecords.length;
+  const monthAttRate = monthTotal > 0 ? Math.round(monthPresent / monthTotal * 100) : null;
+  const monthHwRate = monthTotal > 0 ? Math.round(monthHwDone / monthTotal * 100) : null;
+
+  // Month label for display
+  const monthLabel = MONTH_OPTIONS.find(m => m.value === month)?.label ?? month;
+
+  const exportPDF = async () => {
+    setExporting(true);
+    try {
+      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+
+      // Load and register Cyrillic fonts
+      const [regBuf, boldBuf] = await Promise.all([
+        fetch("/fonts/Roboto-Regular.ttf").then(r => r.arrayBuffer()),
+        fetch("/fonts/Roboto-Bold.ttf").then(r => r.arrayBuffer()),
+      ]);
+      const toBase64 = (buf: ArrayBuffer) => {
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        return btoa(binary);
+      };
+      doc.addFileToVFS("Roboto-Regular.ttf", toBase64(regBuf));
+      doc.addFont("Roboto-Regular.ttf", "Roboto", "normal");
+      doc.addFileToVFS("Roboto-Bold.ttf", toBase64(boldBuf));
+      doc.addFont("Roboto-Bold.ttf", "Roboto", "bold");
+
+      const pageWidth = doc.internal.pageSize.getWidth();
+      let y = 15;
+
+    // Title
+    doc.setFontSize(16);
+    doc.setFont("Roboto", "bold");
+    doc.text(`360° — ${s.full_name}`, pageWidth / 2, y, { align: "center" });
+    y += 7;
+    doc.setFontSize(10);
+    doc.setFont("Roboto", "normal");
+    doc.text(`${s.group?.name ?? ""} | ${monthLabel}`, pageWidth / 2, y, { align: "center" });
+    y += 4;
+    if (s.phone) { doc.text(`Тел: ${s.phone}`, pageWidth / 2, y, { align: "center" }); y += 4; }
+    if (s.parentPhone) { doc.text(`Родитель: ${s.parentName || "—"} — ${s.parentPhone}`, pageWidth / 2, y, { align: "center" }); y += 4; }
+    y += 4;
+
+    // Common autoTable font styles for Cyrillic support
+    const fontStyles = { font: "Roboto" };
+
+    // ─ Summary stats table ─
+    doc.setFontSize(12);
+    doc.setFont("Roboto", "bold");
+    doc.text("Сводка за месяц", 14, y); y += 2;
+    autoTable(doc, {
+      startY: y,
+      head: [["Показатель", "Значение"]],
+      body: [
+        ["Всего уроков", String(monthTotal)],
+        ["Присутствовал", `${monthPresent} (${monthAttRate ?? 0}%)`],
+        ["Отсутствовал", String(monthAbsent)],
+        ["Опоздания", String(monthLate)],
+        ["ДЗ выполнено", `${monthHwDone} (${monthHwRate ?? 0}%)`],
+        ["ДЗ частично", String(monthHwPartial)],
+        ["ДЗ не выполнено", String(monthHwNotDone)],
+      ],
+      theme: "grid",
+      styles: fontStyles,
+      headStyles: { fillColor: [59, 130, 246], fontSize: 9 },
+      bodyStyles: { fontSize: 9 },
+      margin: { left: 14, right: 14 },
+    });
+    y = (doc as any).lastAutoTable.finalY + 8;
+
+    // ─ ENT scores ─
+    if (entMonth && entMonth.subjects?.length > 0) {
+      doc.setFontSize(12);
+      doc.setFont("Roboto", "bold");
+      doc.text("Баллы ЕНТ", 14, y); y += 2;
+      autoTable(doc, {
+        startY: y,
+        head: [["Предмет", "Балл"]],
+        body: [
+          ...entMonth.subjects.map((sub: any) => [sub.name, String(sub.score)]),
+          [{ content: "Итого", styles: { fontStyle: "bold" } }, { content: String(entMonth.total), styles: { fontStyle: "bold" } }],
+        ],
+        theme: "grid",
+        styles: fontStyles,
+        headStyles: { fillColor: [99, 102, 241], fontSize: 9 },
+        bodyStyles: { fontSize: 9 },
+        margin: { left: 14, right: 14 },
+      });
+      y = (doc as any).lastAutoTable.finalY + 8;
+    }
+
+    // ─ Attendance table ─
+    if (monthTotal > 0) {
+      doc.setFontSize(12);
+      doc.setFont("Roboto", "bold");
+      doc.text("Табель посещения", 14, y); y += 2;
+      autoTable(doc, {
+        startY: y,
+        head: [["Дата", "Статус", "Опоздание", "Предмет", "Учитель"]],
+        body: monthRecords.map((r: any) => [
+          r.date ?? "—",
+          r.status === "present" ? "Присутствовал" : "Отсутствовал",
+          r.lateness === "late" ? "Да" : "—",
+          r.subject ?? "—",
+          r.teacher ?? "—",
+        ]),
+        theme: "striped",
+        styles: fontStyles,
+        headStyles: { fillColor: [16, 185, 129], fontSize: 8 },
+        bodyStyles: { fontSize: 8 },
+        margin: { left: 14, right: 14 },
+      });
+      y = (doc as any).lastAutoTable.finalY + 8;
+    }
+
+    // ─ Homework table ─
+    if (monthTotal > 0) {
+      if (y > 250) { doc.addPage(); y = 15; }
+      doc.setFontSize(12);
+      doc.setFont("Roboto", "bold");
+      doc.text("Табель ДЗ", 14, y); y += 2;
+      autoTable(doc, {
+        startY: y,
+        head: [["Дата", "ДЗ", "Предмет", "Комментарий"]],
+        body: monthRecords.map((r: any) => [
+          r.date ?? "—",
+          r.homework === "done" ? "Выполнено" : r.homework === "partial" ? "Частично" : "Не выполнено",
+          r.subject ?? "—",
+          r.comment ?? "—",
+        ]),
+        theme: "striped",
+        styles: fontStyles,
+        headStyles: { fillColor: [245, 158, 11], textColor: [0, 0, 0], fontSize: 8 },
+        bodyStyles: { fontSize: 8 },
+        margin: { left: 14, right: 14 },
+      });
+      y = (doc as any).lastAutoTable.finalY + 8;
+    }
+
+    // ─ Teacher feedback ─
+    if (teacherFeedback.length > 0) {
+      if (y > 250) { doc.addPage(); y = 15; }
+      doc.setFontSize(12);
+      doc.setFont("Roboto", "bold");
+      doc.text("Обратная связь учителей", 14, y); y += 2;
+      autoTable(doc, {
+        startY: y,
+        head: [["Учитель", "Предмет", "Комментарий"]],
+        body: teacherFeedback.map((f: any) => [f.teacher_name ?? "—", f.subject_name ?? "—", f.comment ?? "—"]),
+        theme: "grid",
+        styles: fontStyles,
+        headStyles: { fillColor: [168, 85, 247], fontSize: 8 },
+        bodyStyles: { fontSize: 8 },
+        margin: { left: 14, right: 14 },
+        columnStyles: { 2: { cellWidth: 80 } },
+      });
+      y = (doc as any).lastAutoTable.finalY + 8;
+    }
+
+    // ─ Lesson notes ─
+    if (lessonComments.length > 0) {
+      if (y > 250) { doc.addPage(); y = 15; }
+      doc.setFontSize(12);
+      doc.setFont("Roboto", "bold");
+      doc.text("Заметки уроков", 14, y); y += 2;
+      autoTable(doc, {
+        startY: y,
+        head: [["Дата", "Учитель", "Предмет", "Заметка"]],
+        body: lessonComments.map((c: any) => [c.date ?? "—", c.teacher_name ?? "—", c.subject_name ?? "—", c.comment ?? "—"]),
+        theme: "grid",
+        styles: fontStyles,
+        headStyles: { fillColor: [107, 114, 128], fontSize: 8 },
+        bodyStyles: { fontSize: 8 },
+        margin: { left: 14, right: 14 },
+        columnStyles: { 3: { cellWidth: 70 } },
+      });
+    }
+
+    // Footer
+    const totalPages = doc.getNumberOfPages();
+    for (let p = 1; p <= totalPages; p++) {
+      doc.setPage(p);
+      doc.setFontSize(7);
+      doc.setFont("Roboto", "normal");
+      doc.setTextColor(150);
+      doc.text(`Today CRM — 360° отчёт | ${s.full_name} | ${monthLabel}`, 14, doc.internal.pageSize.getHeight() - 8);
+      doc.text(`${p} / ${totalPages}`, pageWidth - 14, doc.internal.pageSize.getHeight() - 8, { align: "right" });
+      doc.setTextColor(0);
+    }
+
+    doc.save(`360_${s.full_name.replace(/\s+/g, "_")}_${month}.pdf`);
+    } finally { setExporting(false); }
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* ── FIXED STUDENT HEADER ── */}
+      <div className="flex gap-3 items-start">
+        <div className="relative shrink-0">
+          {s.avatar_url && !avatarError ? (
+            <img src={s.avatar_url} alt="" onError={() => setAvatarError(true)}
+              className="w-14 h-14 rounded-xl object-cover ring-2 ring-border shadow-sm" />
+          ) : (
+            <div className="w-14 h-14 rounded-xl bg-muted flex items-center justify-center text-lg font-bold text-muted-foreground ring-1 ring-border">
+              {initials}
+            </div>
+          )}
+          <span className={cn("absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-background",
+            s.status === "active" ? "bg-emerald-500" : "bg-amber-500")} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-base font-bold text-foreground leading-tight truncate">{s.full_name}</h2>
+          <div className="flex flex-wrap items-center gap-1.5 mt-1">
+            {s.group?.name && <Badge variant="secondary" className="text-[10px]">{s.group.name}</Badge>}
+            {s.group?.profileName && <Badge variant="outline" className="text-[10px]">{s.group.profileName}</Badge>}
+            <span className="text-[10px] text-muted-foreground">ID: {s.id}</span>
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1.5 text-[11px] text-muted-foreground">
+            {s.phone && <a href={`tel:${s.phone}`} className="flex items-center gap-1 hover:text-foreground"><Phone className="h-3 w-3" />{formatPhone(s.phone)}</a>}
+            {s.parentPhone && <span className="flex items-center gap-1"><Phone className="h-3 w-3 text-amber-500" />{s.parentName || "Родитель"}: {formatPhone(s.parentPhone)}</span>}
+          </div>
+          {s.group?.curatorName && <p className="text-[10px] text-muted-foreground mt-0.5"><Star className="h-2.5 w-2.5 inline text-amber-400 mr-0.5" />Куратор: {s.group.curatorName}</p>}
+
+          {/* Quick actions */}
+          <div className="flex gap-1.5 mt-2">
+            {s.parentPhone && (
+              <Button variant="outline" size="sm" className="h-6 px-2 text-[10px] gap-1"
+                onClick={() => window.open(`https://wa.me/${s.parentPhone.replace(/\D/g, "")}`, "_blank")}>
+                <MessageSquare className="h-3 w-3 text-emerald-500" /> WhatsApp
+              </Button>
+            )}
+            {s.parentPhone && (
+              <Button variant="outline" size="sm" className="h-6 px-2 text-[10px] gap-1"
+                onClick={() => window.open(`tel:${s.parentPhone}`)}>
+                <Phone className="h-3 w-3" /> Позвонить
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── KPI ROW ── */}
+      <div className="grid grid-cols-3 gap-2">
+        <MiniStat label="Посещаемость" value={monthAttRate !== null ? `${monthAttRate}%` : "—"} accent={monthAttRate === null ? "default" : monthAttRate >= 90 ? "green" : monthAttRate >= 75 ? "amber" : "red"} />
+        <MiniStat label="ЕНТ" value={entMonth ? String(entMonth.total) : (h.entLastScore != null ? String(h.entLastScore) : "—")} accent="blue" />
+        <MiniStat label="ДЗ" value={monthHwRate !== null ? `${monthHwRate}%` : "—"} accent={monthHwRate === null ? "default" : monthHwRate >= 85 ? "green" : monthHwRate >= 60 ? "amber" : "red"} />
+      </div>
+
+      {/* ── MONTHLY SUMMARY STATS ── */}
+      <PanelSection title={`Сводка за ${monthLabel}`} icon={<BarChart3 className="h-3.5 w-3.5" />}>
+        {monthTotal > 0 ? (
+          <div className="space-y-3">
+            {/* Attendance breakdown */}
+            <div className="rounded-lg border p-3 space-y-2">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Calendar className="h-3 w-3 text-muted-foreground" />
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Посещение</span>
+                <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">{monthTotal} уроков</span>
+              </div>
+              <div className="flex gap-1 h-2.5 rounded-full overflow-hidden bg-muted">
+                {monthPresent > 0 && <div className="bg-emerald-500 transition-all" style={{ width: `${monthPresent / monthTotal * 100}%` }} />}
+                {monthLate > 0 && <div className="bg-amber-500 transition-all" style={{ width: `${monthLate / monthTotal * 100}%` }} />}
+                {monthAbsent > 0 && <div className="bg-red-500 transition-all" style={{ width: `${monthAbsent / monthTotal * 100}%` }} />}
+              </div>
+              <div className="grid grid-cols-3 gap-1 text-center">
+                <div className="rounded-md bg-emerald-500/10 py-1.5">
+                  <div className="text-sm font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">{monthPresent}</div>
+                  <div className="text-[9px] text-muted-foreground">Присутствовал</div>
+                </div>
+                <div className="rounded-md bg-amber-500/10 py-1.5">
+                  <div className="text-sm font-bold text-amber-600 dark:text-amber-400 tabular-nums">{monthLate}</div>
+                  <div className="text-[9px] text-muted-foreground">Опоздания</div>
+                </div>
+                <div className="rounded-md bg-red-500/10 py-1.5">
+                  <div className="text-sm font-bold text-red-600 dark:text-red-400 tabular-nums">{monthAbsent}</div>
+                  <div className="text-[9px] text-muted-foreground">Отсутствовал</div>
+                </div>
+              </div>
+            </div>
+            {/* Homework breakdown */}
+            <div className="rounded-lg border p-3 space-y-2">
+              <div className="flex items-center gap-1.5 mb-1">
+                <BookOpen className="h-3 w-3 text-muted-foreground" />
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Домашнее задание</span>
+              </div>
+              <div className="flex gap-1 h-2.5 rounded-full overflow-hidden bg-muted">
+                {monthHwDone > 0 && <div className="bg-emerald-500 transition-all" style={{ width: `${monthHwDone / monthTotal * 100}%` }} />}
+                {monthHwPartial > 0 && <div className="bg-amber-500 transition-all" style={{ width: `${monthHwPartial / monthTotal * 100}%` }} />}
+                {monthHwNotDone > 0 && <div className="bg-red-500/60 transition-all" style={{ width: `${monthHwNotDone / monthTotal * 100}%` }} />}
+              </div>
+              <div className="grid grid-cols-3 gap-1 text-center">
+                <div className="rounded-md bg-emerald-500/10 py-1.5">
+                  <div className="text-sm font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">{monthHwDone}</div>
+                  <div className="text-[9px] text-muted-foreground">Выполнено</div>
+                </div>
+                <div className="rounded-md bg-amber-500/10 py-1.5">
+                  <div className="text-sm font-bold text-amber-600 dark:text-amber-400 tabular-nums">{monthHwPartial}</div>
+                  <div className="text-[9px] text-muted-foreground">Частично</div>
+                </div>
+                <div className="rounded-md bg-red-500/10 py-1.5">
+                  <div className="text-sm font-bold text-red-600/70 dark:text-red-400/70 tabular-nums">{monthHwNotDone}</div>
+                  <div className="text-[9px] text-muted-foreground">Не сделано</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : <EmptyState text="Нет данных за этот месяц" />}
+      </PanelSection>
+
+      {/* ── EXPORT PDF BUTTON ── */}
+      <Button variant="outline" className="w-full gap-2" onClick={exportPDF} disabled={exporting}>
+        <FileDown className="h-4 w-4" /> {exporting ? "Генерация PDF..." : "Экспорт PDF"}
+      </Button>
+
+      {/* ── ENT SCORES FOR MONTH ── */}
+      <PanelSection title="Баллы ЕНТ" icon={<GraduationCap className="h-3.5 w-3.5" />}>
+        {entMonth && entMonth.subjects?.length > 0 ? (
+          <div className="space-y-1.5">
+            {entMonth.subjects.map((sub: any, i: number) => (
+              <div key={i} className="flex items-center justify-between text-sm py-1 px-2 rounded-md bg-muted/40">
+                <span className="text-xs truncate max-w-[160px]">{sub.name}</span>
+                <span className="font-bold text-sm tabular-nums">{sub.score}</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between text-sm py-1.5 px-2 rounded-md bg-primary/10 font-semibold">
+              <span className="text-xs">Итого</span>
+              <span className="font-black tabular-nums">{entMonth.total}</span>
+            </div>
+          </div>
+        ) : <EmptyState text="Нет данных ЕНТ за этот месяц" />}
+      </PanelSection>
+
+      {/* ── LESSON NOTES ── */}
+      <PanelSection title="Заметки уроков" icon={<MessageSquare className="h-3.5 w-3.5" />}>
+        {lessonComments.length > 0 ? (
+          <div className="space-y-1.5">
+            {lessonComments.map((c: any, i: number) => (
+              <div key={i} className="p-2 rounded-md border border-border/60 text-xs space-y-0.5">
+                <div className="flex items-center gap-1.5 text-muted-foreground">
+                  <span className="tabular-nums">{c.date}</span>
+                  {c.teacher_name && <Badge variant="outline" className="text-[9px] h-4 px-1">{c.teacher_name}</Badge>}
+                  {c.subject_name && <Badge variant="secondary" className="text-[9px] h-4 px-1">{c.subject_name}</Badge>}
+                </div>
+                <p className="text-foreground whitespace-pre-wrap">{c.comment}</p>
+              </div>
+            ))}
+          </div>
+        ) : <EmptyState text="Нет заметок за этот месяц" />}
+      </PanelSection>
+
+      {/* ── TEACHER FEEDBACK ── */}
+      <PanelSection title="Обратная связь учителей" icon={<Star className="h-3.5 w-3.5" />}>
+        {teacherFeedback.length > 0 ? (
+          <div className="space-y-1.5">
+            {teacherFeedback.map((f: any, i: number) => (
+              <div key={i} className="p-2 rounded-md border border-border/60 text-xs space-y-0.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-semibold text-foreground">{f.teacher_name}</span>
+                  {f.subject_name && <Badge variant="outline" className="text-[9px] h-4 px-1">{f.subject_name}</Badge>}
+                </div>
+                <p className="text-muted-foreground italic">&ldquo;{f.comment}&rdquo;</p>
+              </div>
+            ))}
+          </div>
+        ) : <EmptyState text="Нет отзывов за этот месяц" />}
+      </PanelSection>
+
+      {/* ── ATTENDANCE TABLE ── */}
+      <PanelSection title="Табель посещения" icon={<Calendar className="h-3.5 w-3.5" />} count={monthTotal > 0 ? `${monthPresent}/${monthTotal}` : undefined}>
+        {monthTotal > 0 ? (
+          <div className="space-y-0.5">
+            {monthRecords.map((r: any, i: number) => (
+              <div key={i} className="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/40 text-xs transition-colors">
+                <span className="w-14 shrink-0 text-muted-foreground tabular-nums">{r.date?.slice(5)}</span>
+                {r.status === "present" ? (
+                  r.lateness === "late" ? <Clock className="h-3.5 w-3.5 text-amber-500 shrink-0" /> : <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                ) : <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />}
+                <span className="flex-1 truncate font-medium">{r.subject ?? "—"}</span>
+                {r.teacher && <span className="text-[10px] text-muted-foreground truncate max-w-[60px]">{r.teacher}</span>}
+              </div>
+            ))}
+            {monthLate > 0 && <p className="text-[10px] text-amber-600 mt-1 px-2">Опозданий: {monthLate}</p>}
+          </div>
+        ) : <EmptyState text="Нет данных о посещении за этот месяц" />}
+      </PanelSection>
+
+      {/* ── HOMEWORK TABLE ── */}
+      <PanelSection title="Табель ДЗ" icon={<BookOpen className="h-3.5 w-3.5" />} count={monthTotal > 0 ? `${monthHwDone}/${monthTotal}` : undefined}>
+        {monthTotal > 0 ? (
+          <div className="space-y-0.5">
+            {monthRecords.map((r: any, i: number) => (
+              <div key={i} className="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/40 text-xs transition-colors">
+                <span className="w-14 shrink-0 text-muted-foreground tabular-nums">{r.date?.slice(5)}</span>
+                {r.homework === "done" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                  : r.homework === "partial" ? <Clock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                  : <BookX className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />}
+                <span className="flex-1 truncate font-medium">{r.subject ?? "—"}</span>
+                {r.comment && <span className="text-[10px] text-muted-foreground truncate max-w-[80px]" title={r.comment}>💬</span>}
+              </div>
+            ))}
+          </div>
+        ) : <EmptyState text="Нет данных о ДЗ за этот месяц" />}
+      </PanelSection>
+    </div>
+  );
+}
+
+function PanelSection({ title, icon, children, count }: { title: string; icon: React.ReactNode; children: React.ReactNode; count?: string }) {
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-2">
+        <span className="text-muted-foreground">{icon}</span>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
+        {count && <span className="ml-auto text-[10px] font-medium text-muted-foreground tabular-nums">{count}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function MiniStat({ label, value, accent }: { label: string; value: string; accent: "green" | "red" | "amber" | "blue" | "default" }) {
+  const cls = { default: "text-muted-foreground", green: "text-emerald-600 dark:text-emerald-400", red: "text-red-600 dark:text-red-400", amber: "text-amber-600 dark:text-amber-400", blue: "text-blue-600 dark:text-blue-400" }[accent];
+  return (
+    <div className="rounded-lg border p-2.5 text-center">
+      <div className={cn("text-lg font-bold tabular-nums leading-none", cls)}>{value}</div>
+      <div className="text-[9px] text-muted-foreground uppercase tracking-wider mt-1">{label}</div>
+    </div>
+  );
+}
+
+function EmptyState({ text }: { text: string }) {
+  return <p className="text-xs text-muted-foreground italic text-center py-3">{text}</p>;
+}
+
+/* ═══════ MAIN PAGE ═══════ */
 
 export default function StudentsPage() {
   const { user } = useAuth();
-  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState("");
   const [selectedGroup, setSelectedGroup] = useState<string>("all");
   const [students, setStudents] = useState<Student[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedStudent, setSelectedStudent] = useState<StudentDetails | null>(null);
-  const [studentDetailsLoading, setStudentDetailsLoading] = useState(false);
-  const [modalOpen, setModalOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("full_name");
   const [sortAsc, setSortAsc] = useState(true);
+
+  // 360 Panel state
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelStudentId, setPanelStudentId] = useState<number | null>(null);
+  const [panelData, setPanelData] = useState<any>(null);
+  const [panelLoading, setPanelLoading] = useState(false);
+  const [panelMonth, setPanelMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [teacherFeedback, setTeacherFeedback] = useState<any[]>([]);
-  const [parentFeedback, setParentFeedback] = useState<any[]>([]);
   const [lessonComments, setLessonComments] = useState<any[]>([]);
-  const [feedbackMonth, setFeedbackMonth] = useState(() => new Date().toISOString().slice(0, 7));
-  const [commentFilter, setCommentFilter] = useState<CommentFilter>("all");
-  const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState({ full_name: "", phone: "", parent_phone: "", parent_name: "" });
-  const [saving, setSaving] = useState(false);
-
-  const lastTeacherFeedbackKeyRef = useRef<string>("");
-  const lastLessonCommentsKeyRef = useRef<string>("");
-
-  const getMonthRange = (month: string) => {
-    const [yStr, mStr] = month.split("-");
-    const y = Number(yStr);
-    const m = Number(mStr);
-    if (!y || !m) return null;
-    const from = `${month}-01`;
-    const lastDay = new Date(y, m, 0).getDate();
-    const to = `${month}-${String(lastDay).padStart(2, "0")}`;
-    return { from, to };
-  };
-
-  const curatorGroupIds = useMemo(() => {
-    if (!user) return new Set<number>();
-    if (user.role === "admin" || user.role === "umo_head") return null; // null = can edit all
-    return new Set(groups.filter(g => g.curator_id === parseInt(user.id)).map(g => g.id));
-  }, [groups, user]);
-
-  const canEditStudent = (student: Student | StudentDetails) => {
-    if (!user) return false;
-    if (curatorGroupIds === null) return true; // admin/umo_head
-    return !!student.group_id && curatorGroupIds.has(student.group_id);
-  };
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [studentsData, groupsData] = await Promise.all([
-          fetchStudents(),
-          fetchGroups()
-        ]);
+        const [studentsData, groupsData] = await Promise.all([fetchStudents(), fetchGroups()]);
         setStudents(studentsData);
         setGroups(groupsData);
-      } catch (error) {
-        console.error("Error loading data:", error);
-      } finally {
-        setLoading(false);
-      }
+      } catch (error) { console.error("Error loading data:", error); }
+      finally { setLoading(false); }
     };
     loadData();
   }, []);
+
+  // Handle command palette focus=search action
+  useEffect(() => {
+    if (searchParams.get("focus") === "search") {
+      searchParams.delete("focus");
+      setSearchParams(searchParams, { replace: true });
+      setTimeout(() => searchInputRef.current?.focus(), 100);
+    }
+  }, [searchParams, setSearchParams]);
+
+  const openPanel = useCallback(async (studentId: number) => {
+    setPanelStudentId(studentId);
+    setPanelOpen(true);
+    setPanelLoading(true);
+    setPanelData(null);
+    setTeacherFeedback([]);
+    setLessonComments([]);
+    try {
+      const month = panelMonth;
+      const range = getMonthRange(month);
+      const [data, tf, lc] = await Promise.all([
+        fetchStudent360(studentId),
+        fetchTeacherFeedbackByStudent(studentId, month),
+        range ? fetchLessonCommentsByStudent({ studentId, from: range.from, to: range.to, limit: 200 }) : Promise.resolve([]),
+      ]);
+      setPanelData(data);
+      setTeacherFeedback(tf || []);
+      setLessonComments(lc || []);
+    } catch (error) { console.error("Error loading student 360:", error); }
+    finally { setPanelLoading(false); }
+  }, [panelMonth]);
+
+  // Reload feedback/comments when month changes while panel is open
+  useEffect(() => {
+    if (!panelOpen || !panelStudentId) return;
+    const range = getMonthRange(panelMonth);
+    Promise.all([
+      fetchTeacherFeedbackByStudent(panelStudentId, panelMonth),
+      range ? fetchLessonCommentsByStudent({ studentId: panelStudentId, from: range.from, to: range.to, limit: 200 }) : Promise.resolve([]),
+    ]).then(([tf, lc]) => {
+      setTeacherFeedback(tf || []);
+      setLessonComments(lc || []);
+    });
+  }, [panelMonth, panelOpen, panelStudentId]);
 
   const filteredStudents = useMemo(() => {
     let result = students.filter((student) => {
@@ -151,19 +624,8 @@ export default function StudentsPage() {
 
   const stats = useMemo(() => {
     const total = students.length;
-    const withAttendance = students.filter(s => s.attendance_rate !== null && s.attendance_rate !== undefined);
-    const avgAttendance = withAttendance.length > 0
-      ? Math.round(withAttendance.reduce((sum, s) => sum + (s.attendance_rate || 0), 0) / withAttendance.length)
-      : 0;
-    const withEnt = students.filter(s => s.last_ent_score && s.last_ent_score > 0);
-    const avgEnt = withEnt.length > 0
-      ? Math.round(withEnt.reduce((sum, s) => sum + (s.last_ent_score || 0), 0) / withEnt.length)
-      : 0;
-    const groupCounts = groups.map(g => ({
-      ...g,
-      count: students.filter(s => s.group_id === g.id).length
-    }));
-    return { total, avgAttendance, avgEnt, withEnt: withEnt.length, groupCounts };
+    const groupCounts = groups.map(g => ({ ...g, count: students.filter(s => s.group_id === g.id).length }));
+    return { total, groupCounts };
   }, [students, groups]);
 
   const handleSort = (key: SortKey) => {
@@ -171,245 +633,9 @@ export default function StudentsPage() {
     else { setSortKey(key); setSortAsc(true); }
   };
 
-  const handleStudentClick = async (student: Student) => {
-    setModalOpen(true);
-    setStudentDetailsLoading(true);
-    setTeacherFeedback([]);
-    setParentFeedback([]);
-    setLessonComments([]);
-    try {
-      const range = getMonthRange(feedbackMonth);
-      const [details, tf, pf] = await Promise.all([
-        fetchStudent(student.id.toString()),
-        fetchTeacherFeedbackByStudent(student.id, feedbackMonth),
-        fetchParentFeedback({ student_id: student.id }),
-      ]);
-      setSelectedStudent(details);
-      setTeacherFeedback(tf || []);
-      setParentFeedback(pf || []);
-
-      lastTeacherFeedbackKeyRef.current = `${student.id}:${feedbackMonth}`;
-
-      if (commentFilter === "all") {
-        lastLessonCommentsKeyRef.current = `${student.id}:all`;
-        const lc = await fetchLessonCommentsByStudent({ studentId: student.id, limit: 200 });
-        setLessonComments(lc || []);
-      } else if (range) {
-        lastLessonCommentsKeyRef.current = `${student.id}:month:${feedbackMonth}`;
-        const lc = await fetchLessonCommentsByStudent({ studentId: student.id, from: range.from, to: range.to, limit: 200 });
-        setLessonComments(lc || []);
-      }
-    } catch (error) {
-      console.error("Error loading student details:", error);
-      setSelectedStudent(student);
-    } finally {
-      setStudentDetailsLoading(false);
-    }
-  };
-
-  const startEditing = () => {
-    if (!selectedStudent) return;
-    setEditForm({
-      full_name: selectedStudent.full_name || "",
-      phone: selectedStudent.phone ? formatPhone(selectedStudent.phone) : "",
-      parent_phone: selectedStudent.parent_phone ? formatPhone(selectedStudent.parent_phone) : "",
-      parent_name: selectedStudent.parent_name || "",
-    });
-    setEditMode(true);
-  };
-
-  const cancelEditing = () => {
-    setEditMode(false);
-  };
-
-  const handleSaveStudent = async () => {
-    if (!selectedStudent) return;
-    setSaving(true);
-    try {
-      await updateStudent(selectedStudent.id, editForm);
-      const updated = await fetchStudent(selectedStudent.id.toString());
-      setSelectedStudent(updated);
-      setStudents(prev => prev.map(s => s.id === selectedStudent.id ? { ...s, full_name: editForm.full_name, phone: editForm.phone, parent_phone: editForm.parent_phone, parent_name: editForm.parent_name } : s));
-      setEditMode(false);
-    } catch (error) {
-      console.error("Error saving student:", error);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const rateColor = (rate: number | null | undefined) => {
     if (rate === null || rate === undefined) return "text-muted-foreground";
-    if (rate >= 90) return "text-green-600";
-    if (rate >= 70) return "text-amber-600";
-    return "text-red-600";
-  };
-
-  const rateBg = (rate: number | null | undefined) => {
-    if (rate === null || rate === undefined) return "bg-muted";
-    if (rate >= 90) return "bg-green-500/10";
-    if (rate >= 70) return "bg-amber-500/10";
-    return "bg-red-500/10";
-  };
-
-  // Reload teacher feedback when month changes
-  useEffect(() => {
-    if (!selectedStudent || !modalOpen) return;
-    const key = `${selectedStudent.id}:${feedbackMonth}`;
-    if (lastTeacherFeedbackKeyRef.current === key) return;
-    lastTeacherFeedbackKeyRef.current = key;
-    fetchTeacherFeedbackByStudent(selectedStudent.id, feedbackMonth).then(setTeacherFeedback);
-  }, [feedbackMonth, modalOpen, selectedStudent]);
-
-  // Reload attendance comments when filter/month changes
-  useEffect(() => {
-    if (!selectedStudent || !modalOpen) return;
-
-    if (commentFilter === "all") {
-      const key = `${selectedStudent.id}:all`;
-      if (lastLessonCommentsKeyRef.current === key) return;
-      lastLessonCommentsKeyRef.current = key;
-      fetchLessonCommentsByStudent({ studentId: selectedStudent.id, limit: 200 }).then(setLessonComments);
-      return;
-    }
-
-    const range = getMonthRange(feedbackMonth);
-    if (!range) {
-      setLessonComments([]);
-      return;
-    }
-    const key = `${selectedStudent.id}:month:${feedbackMonth}`;
-    if (lastLessonCommentsKeyRef.current === key) return;
-    lastLessonCommentsKeyRef.current = key;
-    fetchLessonCommentsByStudent({ studentId: selectedStudent.id, from: range.from, to: range.to, limit: 200 }).then(setLessonComments);
-  }, [commentFilter, feedbackMonth, modalOpen, selectedStudent]);
-
-  const MONTH_OPTIONS = [
-    { value: "2025-09", label: "Сентябрь 2025" },
-    { value: "2025-10", label: "Октябрь 2025" },
-    { value: "2025-11", label: "Ноябрь 2025" },
-    { value: "2025-12", label: "Декабрь 2025" },
-    { value: "2026-01", label: "Январь 2026" },
-    { value: "2026-02", label: "Февраль 2026" },
-    { value: "2026-03", label: "Март 2026" },
-    { value: "2026-04", label: "Апрель 2026" },
-    { value: "2026-05", label: "Май 2026" },
-  ];
-
-  const exportStudentPDF = () => {
-    if (!selectedStudent) return;
-    const s = selectedStudent;
-    const stats = s.attendance_stats;
-    const monthLabel = MONTH_OPTIONS.find(m => m.value === feedbackMonth)?.label || feedbackMonth;
-
-    const attendanceRows = (s.recent_attendance || [])
-      .map(r => `<tr><td>${r.date}</td><td>${r.subject_name || "—"}</td><td class="${r.status === 'present' ? 'present' : 'absent'}">${r.status === 'present' ? 'Присутствовал' : 'Отсутствовал'}</td><td>${r.homework === 'done' ? 'Да' : '—'}</td><td>${r.lateness === 'late' ? 'Да' : '—'}</td></tr>`)
-      .join('');
-
-    const entRows = (s.ent_results || [])
-      .map(e => `<tr><td>${e.month}</td><td>${e.subject_name}</td><td class="score">${e.score}</td></tr>`)
-      .join('');
-
-    const entMonths = [...new Set((s.ent_results || []).map(e => e.month))].sort().reverse();
-    const entSummary = entMonths.map(month => {
-      const results = (s.ent_results || []).filter(e => e.month === month);
-      const total = results.reduce((sum, e) => sum + e.score, 0);
-      return `<div class="ent-month"><strong>${month}:</strong> ${results.map(e => `${e.subject_name}: ${e.score}`).join(', ')} — <strong>Итого: ${total}</strong></div>`;
-    }).join('');
-
-    const feedbackRows = teacherFeedback
-      .map(f => `<div class="feedback-item"><div class="feedback-teacher">${f.teacher_name} · ${f.subject_name || ''}</div><div class="feedback-text">${f.comment}</div></div>`)
-      .join('');
-
-    const parentRows = parentFeedback
-      .map(f => `<div class="feedback-item"><div class="feedback-teacher">${f.date} · Статус: ${f.status || 'не указан'}</div>${f.notes ? `<div class="feedback-text">${f.notes}</div>` : ''}</div>`)
-      .join('');
-
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Карточка ученика — ${s.full_name}</title><style>
-      * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { font-family: 'Segoe UI', Arial, sans-serif; padding: 30px; color: #000; font-size: 12px; }
-      .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; border-bottom: 3px solid #000; padding-bottom: 14px; }
-      .logo { font-size: 24px; font-weight: 900; letter-spacing: 2px; }
-      .logo span { display: inline-block; width: 6px; height: 6px; background: #000; border-radius: 50%; margin-left: 2px; vertical-align: super; }
-      .subtitle { font-size: 11px; color: #555; margin-top: 2px; }
-      .student-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
-      .student-group { font-size: 13px; color: #555; }
-      .section { margin: 16px 0; }
-      .section-title { font-size: 14px; font-weight: 700; border-left: 4px solid #000; padding-left: 8px; margin-bottom: 8px; }
-      .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-      .info-item label { font-size: 10px; color: #777; text-transform: uppercase; display: block; }
-      .info-item p { font-size: 13px; font-weight: 600; }
-      .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-      .stat-box { border: 1px solid #ddd; border-radius: 6px; padding: 8px; text-align: center; }
-      .stat-box .value { font-size: 20px; font-weight: 700; }
-      .stat-box .label { font-size: 9px; color: #777; text-transform: uppercase; }
-      table { width: 100%; border-collapse: collapse; margin-top: 6px; }
-      th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; font-size: 11px; }
-      th { background: #f0f0f0; font-weight: 700; font-size: 10px; text-transform: uppercase; }
-      .present { color: #16a34a; font-weight: 600; }
-      .absent { color: #dc2626; font-weight: 600; }
-      .score { font-weight: 700; text-align: center; }
-      .ent-month { margin-bottom: 4px; font-size: 11px; }
-      .feedback-item { border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px; margin-bottom: 6px; }
-      .feedback-teacher { font-size: 11px; font-weight: 600; color: #555; margin-bottom: 3px; }
-      .feedback-text { font-size: 12px; }
-      .footer { margin-top: 20px; font-size: 9px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 8px; }
-      @media print { body { padding: 15px; } }
-    </style></head><body>
-    <div class="header">
-      <div><div class="logo">TODAY<span></span></div><div class="subtitle">Образовательный центр · Карточка ученика</div></div>
-      <div style="text-align:right"><div class="student-name">${s.full_name}</div><div class="student-group">${s.group_name || ''} · ${monthLabel}</div></div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Общая информация</div>
-      <div class="info-grid">
-        <div class="info-item"><label>Группа</label><p>${s.group_name || '—'}</p></div>
-        <div class="info-item"><label>Телефон</label><p>${s.phone ? formatPhone(s.phone) : '—'}</p></div>
-        <div class="info-item"><label>Родитель</label><p>${s.parent_name || '—'}</p></div>
-        <div class="info-item"><label>Тел. родителя</label><p>${s.parent_phone ? formatPhone(s.parent_phone) : '—'}</p></div>
-      </div>
-    </div>
-
-    ${stats && stats.total_lessons > 0 ? `
-    <div class="section">
-      <div class="section-title">Посещаемость</div>
-      <div class="stats-grid">
-        <div class="stat-box"><div class="value">${stats.attendance_rate}%</div><div class="label">Посещаемость</div></div>
-        <div class="stat-box"><div class="value">${stats.total_lessons}</div><div class="label">Всего уроков</div></div>
-        <div class="stat-box"><div class="value" style="color:#16a34a">${stats.present_count}</div><div class="label">Присутствовал</div></div>
-        <div class="stat-box"><div class="value" style="color:#dc2626">${stats.absent_count}</div><div class="label">Отсутствовал</div></div>
-      </div>
-      ${attendanceRows ? `<table><thead><tr><th>Дата</th><th>Предмет</th><th>Статус</th><th>ДЗ</th><th>Опоздание</th></tr></thead><tbody>${attendanceRows}</tbody></table>` : ''}
-    </div>` : ''}
-
-    ${entSummary ? `
-    <div class="section">
-      <div class="section-title">Результаты ЕНТ</div>
-      ${entSummary}
-    </div>` : ''}
-
-    ${feedbackRows ? `
-    <div class="section">
-      <div class="section-title">Отзывы учителей (${monthLabel})</div>
-      ${feedbackRows}
-    </div>` : ''}
-
-    ${parentRows ? `
-    <div class="section">
-      <div class="section-title">Обратная связь с родителями</div>
-      ${parentRows}
-    </div>` : ''}
-
-    <div class="footer">TODAY Education Center · Сгенерировано ${new Date().toLocaleString('ru-RU')}</div>
-    </body></html>`;
-
-    const printWindow = window.open('', '_blank');
-    if (printWindow) {
-      printWindow.document.write(html);
-      printWindow.document.close();
-      setTimeout(() => printWindow.print(), 500);
-    }
+    if (rate >= 90) return "text-green-600"; if (rate >= 70) return "text-amber-600"; return "text-red-600";
   };
 
   if (loading) {
@@ -441,15 +667,11 @@ export default function StudentsPage() {
       {/* Group pills */}
       <div className="flex flex-wrap gap-2 mb-4">
         {stats.groupCounts.map(g => (
-          <button
-            key={g.id}
+          <button key={g.id}
             onClick={() => setSelectedGroup(selectedGroup === g.id.toString() ? "all" : g.id.toString())}
             className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-              selectedGroup === g.id.toString()
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted text-muted-foreground hover:bg-muted/80"
-            }`}
-          >
+              selectedGroup === g.id.toString() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
+            }`}>
             {g.name} ({g.count})
           </button>
         ))}
@@ -464,22 +686,18 @@ export default function StudentsPage() {
       <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 mb-4">
         <div className="relative flex-1 sm:max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Поиск по имени..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-          />
+          <Input ref={searchInputRef} placeholder="Поиск по имени..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
         <Select value={selectedGroup} onValueChange={setSelectedGroup}>
           <SelectTrigger className="w-full sm:w-48">
-            <Filter className="h-4 w-4 mr-2" />
-            <SelectValue placeholder="Все группы" />
+            <Filter className="h-4 w-4 mr-2" /><SelectValue placeholder="Все группы" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Все группы</SelectItem>
             {groups.map((group) => (
-              <SelectItem key={group.id} value={group.id.toString()}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={group.name} size={18} showTooltip={false} />{group.name}</span></SelectItem>
+              <SelectItem key={group.id} value={group.id.toString()}>
+                <span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={group.name} size={18} showTooltip={false} />{group.name}</span>
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -492,14 +710,10 @@ export default function StudentsPage() {
             <thead>
               <tr className="border-b bg-muted/50">
                 <th className="text-left p-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  <button onClick={() => handleSort("full_name")} className="flex items-center gap-1 hover:text-foreground">
-                    ФИО <ArrowUpDown className="h-3 w-3" />
-                  </button>
+                  <button onClick={() => handleSort("full_name")} className="flex items-center gap-1 hover:text-foreground">ФИО <ArrowUpDown className="h-3 w-3" /></button>
                 </th>
                 <th className="text-left p-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  <button onClick={() => handleSort("group_name")} className="flex items-center gap-1 hover:text-foreground">
-                    Группа <ArrowUpDown className="h-3 w-3" />
-                  </button>
+                  <button onClick={() => handleSort("group_name")} className="flex items-center gap-1 hover:text-foreground">Группа <ArrowUpDown className="h-3 w-3" /></button>
                 </th>
                 <th className="text-left p-2 md:p-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider hidden md:table-cell">
                   <Phone className="h-3 w-3 inline mr-1" />Телефон
@@ -510,56 +724,37 @@ export default function StudentsPage() {
                   </button>
                 </th>
                 <th className="text-center p-2 md:p-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider hidden sm:table-cell">
-                  <button onClick={() => handleSort("last_ent_score")} className="flex items-center gap-1 hover:text-foreground mx-auto">
-                    ЕНТ <ArrowUpDown className="h-3 w-3" />
-                  </button>
+                  <button onClick={() => handleSort("last_ent_score")} className="flex items-center gap-1 hover:text-foreground mx-auto">ЕНТ <ArrowUpDown className="h-3 w-3" /></button>
                 </th>
               </tr>
             </thead>
             <tbody>
               {filteredStudents.map((student) => (
-                <tr
-                  key={student.id}
-                  onClick={() => navigate(`/students/${student.id}`)}
-                  className="border-b hover:bg-muted/30 cursor-pointer transition-colors"
-                >
+                <tr key={student.id}
+                  onClick={() => openPanel(student.id)}
+                  className="border-b hover:bg-muted/30 cursor-pointer transition-colors">
                   <td className="p-3">
                     <div className="flex items-center gap-2">
                       <UserAvatar user={student} size="sm" />
                       <div>
                         <p className="font-medium text-sm">{student.full_name}</p>
-                        {student.parent_name && (
-                          <p className="text-[11px] text-muted-foreground">Родитель: {student.parent_name}</p>
-                        )}
+                        {student.parent_name && <p className="text-[11px] text-muted-foreground">Родитель: {student.parent_name}</p>}
                       </div>
                     </div>
                   </td>
-                  <td className="p-3">
-                    <Badge variant="outline" className="text-xs">{student.group_name || "—"}</Badge>
-                  </td>
-                  <td className="p-2 md:p-3 hidden md:table-cell text-sm text-muted-foreground">
-                    {student.phone || "—"}
-                  </td>
+                  <td className="p-3"><Badge variant="outline" className="text-xs">{student.group_name || "—"}</Badge></td>
+                  <td className="p-2 md:p-3 hidden md:table-cell text-sm text-muted-foreground">{student.phone || "—"}</td>
                   <td className="p-2 md:p-3 text-center">
                     {student.attendance_rate !== null && student.attendance_rate !== undefined ? (
                       <div className="flex items-center justify-center gap-2">
-                        <div className="w-16">
-                          <Progress value={student.attendance_rate} className={`h-1.5 ${rateBg(student.attendance_rate)}`} />
-                        </div>
-                        <span className={`text-xs font-medium ${rateColor(student.attendance_rate)}`}>
-                          {Math.round(student.attendance_rate)}%
-                        </span>
+                        <div className="w-16"><Progress value={student.attendance_rate} className="h-1.5" /></div>
+                        <span className={`text-xs font-medium ${rateColor(student.attendance_rate)}`}>{Math.round(student.attendance_rate)}%</span>
                       </div>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    )}
+                    ) : <span className="text-xs text-muted-foreground">—</span>}
                   </td>
                   <td className="p-2 md:p-3 text-center hidden sm:table-cell">
-                    {student.last_ent_score ? (
-                      <Badge variant="secondary" className="text-xs font-medium">{student.last_ent_score}</Badge>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    )}
+                    {student.last_ent_score ? <Badge variant="secondary" className="text-xs font-medium">{student.last_ent_score}</Badge>
+                      : <span className="text-xs text-muted-foreground">—</span>}
                   </td>
                 </tr>
               ))}
@@ -574,344 +769,34 @@ export default function StudentsPage() {
         )}
       </Card>
 
-      <p className="text-xs text-muted-foreground mt-2 text-right">
-        Показано {filteredStudents.length} из {students.length}
-      </p>
+      <p className="text-xs text-muted-foreground mt-2 text-right">Показано {filteredStudents.length} из {students.length}</p>
 
-      {/* Student Details Modal */}
-      <Dialog open={modalOpen} onOpenChange={(open) => { setModalOpen(open); if (!open) setEditMode(false); }}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 pr-8">
-              <Users className="h-5 w-5 shrink-0" />
-              <span className="flex-1 truncate">{selectedStudent?.full_name}</span>
-
-              {/* Action toolbar — right side */}
-              <div className="flex items-center gap-1.5 ml-auto shrink-0">
-                {/* Edit / Save / Cancel — primary */}
-                {selectedStudent && !editMode && canEditStudent(selectedStudent) && (
-                  <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={startEditing}>
-                    <Pencil className="h-3.5 w-3.5" /> Редактировать
-                  </Button>
-                )}
-                {editMode && (
-                  <>
-                    <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={handleSaveStudent} disabled={saving}>
-                      <Save className="h-3.5 w-3.5" /> {saving ? "…" : "Сохранить"}
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={cancelEditing} disabled={saving}>
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </>
-                )}
-
-                {/* Secondary actions dropdown */}
-                {selectedStudent && !editMode && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-44">
-                      <DropdownMenuItem onClick={exportStudentPDF}>
-                        <Download className="h-3.5 w-3.5 mr-2" /> Скачать PDF
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-              </div>
-            </DialogTitle>
-          </DialogHeader>
-          {studentDetailsLoading ? (
-            <div className="space-y-4 py-4">
-              <Skeleton className="h-8 w-full rounded-lg" />
-              <div className="grid grid-cols-2 gap-4">
-                {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-12 rounded-lg" />)}
-              </div>
-            </div>
-          ) : selectedStudent && (
-              <Tabs defaultValue="info" className="mt-2">
-              <TabsList className="grid w-full grid-cols-5">
-                <TabsTrigger value="info">Информация</TabsTrigger>
-                <TabsTrigger value="attendance">Посещаемость</TabsTrigger>
-                <TabsTrigger value="ent">ЕНТ</TabsTrigger>
-                <TabsTrigger value="teacherReviews">Отзывы учителей</TabsTrigger>
-                <TabsTrigger value="comments">Комментарии</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="info" className="space-y-4 mt-4">
-                <div className="flex items-center gap-6 mb-4">
-                  <UserAvatar user={selectedStudent} size="lg" />
-                  {canEditStudent(selectedStudent) && !editMode && (
-                    <div className="flex flex-col gap-2">
-                      <label htmlFor="student-avatar-upload" className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-primary">
-                        <ImagePlus className="h-4 w-4" /> Загрузить фото
-                        <input
-                          id="student-avatar-upload"
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={async (e) => {
-                            const file = e.target.files?.[0];
-                            if (!file) return;
-                            try {
-                              await uploadStudentAvatar(selectedStudent.id, file);
-                              const updated = await fetchStudent(selectedStudent.id.toString());
-                              setSelectedStudent(updated);
-                              setStudents(prev => prev.map(s => s.id === selectedStudent.id ? { ...s, avatar_url: updated.avatar_url } : s));
-                            } catch (err) { alert("Ошибка загрузки фото"); }
-                          }}
-                        />
-                      </label>
-                      {selectedStudent.avatar_url && (
-                        <button
-                          className="flex items-center gap-1 text-xs text-destructive hover:underline"
-                          onClick={async () => {
-                            try {
-                              await deleteStudentAvatar(selectedStudent.id);
-                              const updated = await fetchStudent(selectedStudent.id.toString());
-                              setSelectedStudent(updated);
-                              setStudents(prev => prev.map(s => s.id === selectedStudent.id ? { ...s, avatar_url: null } : s));
-                            } catch (err) { alert("Ошибка удаления фото"); }
-                          }}
-                        >
-                          <Trash2 className="h-3 w-3" /> Удалить фото
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-                {editMode ? (
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">ФИО</label>
-                      <Input value={editForm.full_name} onChange={e => setEditForm(f => ({ ...f, full_name: e.target.value }))} />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">Группа</label>
-                      <p className="text-sm font-medium pt-2">{selectedStudent.group_name || "—"}</p>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">Телефон</label>
-                      <Input value={editForm.phone} onChange={e => setEditForm(f => ({ ...f, phone: formatPhone(e.target.value) }))} />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">Родитель</label>
-                      <Input value={editForm.parent_name} onChange={e => setEditForm(f => ({ ...f, parent_name: e.target.value }))} />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">Тел. родителя</label>
-                      <Input value={editForm.parent_phone} onChange={e => setEditForm(f => ({ ...f, parent_phone: formatPhone(e.target.value) }))} />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Группа</label>
-                      <p className="text-sm font-medium">{selectedStudent.group_name || "—"}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Телефон</label>
-                      <p className="text-sm font-medium">{selectedStudent.phone ? formatPhone(selectedStudent.phone) : "—"}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Родитель</label>
-                      <p className="text-sm font-medium">{selectedStudent.parent_name || "—"}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Тел. родителя</label>
-                      <p className="text-sm font-medium">{selectedStudent.parent_phone ? formatPhone(selectedStudent.parent_phone) : "—"}</p>
-                    </div>
-                  </div>
-                )}
-              </TabsContent>
-
-              <TabsContent value="attendance" className="space-y-4 mt-4">
-                {selectedStudent.attendance_stats && selectedStudent.attendance_stats.total_lessons > 0 ? (
-                  <>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                      <Card><CardContent className="p-3">
-                        <div className={`text-2xl font-bold ${rateColor(selectedStudent.attendance_stats.attendance_rate)}`}>
-                          {selectedStudent.attendance_stats.attendance_rate}%
-                        </div>
-                        <p className="text-xs text-muted-foreground">Посещаемость</p>
-                      </CardContent></Card>
-                      <Card><CardContent className="p-3">
-                        <div className="text-2xl font-bold text-blue-600">{selectedStudent.attendance_stats.total_lessons}</div>
-                        <p className="text-xs text-muted-foreground">Всего уроков</p>
-                      </CardContent></Card>
-                      <Card><CardContent className="p-3">
-                        <div className="text-2xl font-bold text-green-600">{selectedStudent.attendance_stats.present_count}</div>
-                        <p className="text-xs text-muted-foreground">Присутствовал</p>
-                      </CardContent></Card>
-                      <Card><CardContent className="p-3">
-                        <div className="text-2xl font-bold text-red-600">{selectedStudent.attendance_stats.absent_count}</div>
-                        <p className="text-xs text-muted-foreground">Отсутствовал</p>
-                      </CardContent></Card>
-                    </div>
-
-                    {selectedStudent.recent_attendance && selectedStudent.recent_attendance.length > 0 && (
-                      <div>
-                        <h4 className="text-sm font-semibold mb-2">Последние записи</h4>
-                        <div className="space-y-1.5">
-                          {selectedStudent.recent_attendance.map((record, index) => (
-                            <div key={index} className="flex items-center justify-between p-2.5 border rounded-lg text-sm">
-                              <div className="flex items-center gap-2">
-                                <Badge variant={record.status === 'present' ? 'default' : 'destructive'} className="text-[10px]">
-                                  {record.status === 'present' ? 'Был' : 'Нет'}
-                                </Badge>
-                                <div>
-                                  <p className="font-medium text-xs">{record.subject_name || "—"}</p>
-                                  <p className="text-[10px] text-muted-foreground">{record.date}</p>
-                                  {record.comment && (
-                                    <p className="text-[10px] text-muted-foreground/80 truncate max-w-[220px]">
-                                      {record.comment}
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="flex gap-1">
-                                {record.homework === 'done' && <Badge variant="outline" className="text-[9px]">ДЗ ✓</Badge>}
-                                {record.lateness === 'late' && <Badge variant="outline" className="text-[9px] text-amber-600">Опоздал</Badge>}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Calendar className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                    <p className="text-sm">Нет данных о посещаемости</p>
-                  </div>
-                )}
-              </TabsContent>
-
-              <TabsContent value="ent" className="space-y-4 mt-4">
-                {selectedStudent.ent_results && selectedStudent.ent_results.length > 0 ? (() => {
-                  const months = [...new Set(selectedStudent.ent_results!.map(e => e.month))].sort().reverse();
-                  return (
-                    <div className="space-y-4">
-                      {months.map(month => {
-                        const monthResults = selectedStudent.ent_results!.filter(e => e.month === month);
-                        const total = monthResults.reduce((s, e) => s + e.score, 0);
-                        return (
-                          <div key={month}>
-                            <div className="flex items-center justify-between mb-2">
-                              <h4 className="text-sm font-semibold">{month}</h4>
-                              <Badge variant="secondary" className="text-xs">Итого: {total}</Badge>
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              {monthResults.map((e, i) => (
-                                <div key={i} className="flex items-center justify-between p-2 border rounded-lg">
-                                  <span className="text-xs">{e.subject_name}</span>
-                                  <span className="text-sm font-bold">{e.score}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })() : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <GraduationCap className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                    <p className="text-sm">Нет результатов ЕНТ</p>
-                  </div>
-                )}
-              </TabsContent>
-
-              <TabsContent value="teacherReviews" className="space-y-4 mt-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Select value={feedbackMonth} onValueChange={setFeedbackMonth}>
-                    <SelectTrigger className="w-48">
-                      <SelectValue placeholder="Месяц" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {MONTH_OPTIONS.map(m => (
-                        <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {teacherFeedback.length > 0 ? (
-                  <div>
-                    <div className="space-y-2">
-                      {teacherFeedback.map((f: any) => (
-                        <div key={f.id} className="p-3 border rounded-lg">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-xs font-semibold text-muted-foreground">{f.teacher_name}</span>
-                            {f.subject_name && <Badge variant="outline" className="text-[10px]">{f.subject_name}</Badge>}
-                          </div>
-                          <p className="text-sm">{f.comment}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-6 text-muted-foreground">
-                    <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                    <p className="text-sm">Нет отзывов учителей за выбранный месяц</p>
-                  </div>
-                )}
-              </TabsContent>
-
-              <TabsContent value="comments" className="space-y-4 mt-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Select value={commentFilter} onValueChange={(v) => setCommentFilter(v as CommentFilter)}>
-                    <SelectTrigger className="w-48">
-                      <SelectValue placeholder="Фильтр" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Все</SelectItem>
-                      <SelectItem value="month">За месяц</SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  {commentFilter === "month" && (
-                    <Select value={feedbackMonth} onValueChange={setFeedbackMonth}>
-                      <SelectTrigger className="w-48">
-                        <SelectValue placeholder="Месяц" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {MONTH_OPTIONS.map(m => (
-                          <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                </div>
-
-                {lessonComments.length > 0 ? (
-                  <div>
-                    <div className="space-y-2">
-                      {lessonComments.map((c: any, i: number) => (
-                        <div key={`${c.date}-${i}`} className="p-3 border rounded-lg">
-                          <div className="flex flex-wrap items-center gap-2 mb-1">
-                            <span className="text-xs font-semibold text-muted-foreground">{c.date}</span>
-                            {c.teacher_name && <Badge variant="outline" className="text-[10px]">{c.teacher_name}</Badge>}
-                            {c.subject_name && <Badge variant="secondary" className="text-[10px]">{c.subject_name}</Badge>}
-                          </div>
-                          <p className="text-sm whitespace-pre-wrap">{c.comment}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-4 text-muted-foreground">
-                    <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                    <p className="text-sm">Нет комментариев</p>
-                  </div>
-                )}
-              </TabsContent>
-            </Tabs>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* ── 360 PANEL (Sheet) ── */}
+      <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
+        <SheetContent side="right" className="w-full sm:max-w-md md:max-w-lg overflow-y-auto p-0">
+          {/* Panel header with month selector */}
+          <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b px-4 py-3 flex items-center justify-between gap-2">
+            <SheetTitle className="text-sm font-semibold text-foreground truncate">Профиль 360°</SheetTitle>
+            <Select value={panelMonth} onValueChange={setPanelMonth}>
+              <SelectTrigger className="w-32 h-7 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MONTH_OPTIONS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="px-4 py-4">
+            <Student360Panel
+              data={panelData}
+              month={panelMonth}
+              teacherFeedback={teacherFeedback}
+              lessonComments={lessonComments}
+              loading={panelLoading}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

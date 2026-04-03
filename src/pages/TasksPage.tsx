@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { DragDropContext, Droppable, Draggable, DropResult } from "@hello-pangea/dnd";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSearchParams } from "react-router-dom";
 import { UserAvatar } from "@/components/UserAvatar";
 import { MentionInput, RenderMentionText } from "@/components/MentionInput";
 import { clearDraft } from "@/lib/drafts";
@@ -918,6 +919,7 @@ function TaskCard({ task, canDelete, onDelete, onClick, currentUserId, onConfirm
 
 export default function TasksPage() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [tasks, setTasks] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -937,6 +939,15 @@ export default function TasksPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Handle command palette action=create
+  useEffect(() => {
+    if (searchParams.get("action") === "create") {
+      searchParams.delete("action");
+      setSearchParams(searchParams, { replace: true });
+      setShowCreate(true);
+    }
+  }, [searchParams, setSearchParams]);
 
   // Admins see all; others see only tasks assigned to them (or created by them)
   const visible = useMemo(() => {

@@ -511,6 +511,157 @@ function AttendanceTab({ s }: { s: any }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   QUIZZES TAB
+   ═══════════════════════════════════════════════════════════════════════════ */
+function QuizzesTab({ s }: { s: any }) {
+  const quizzes: any[] = s.quizzes ?? [];
+
+  if (!quizzes.length) {
+    return (
+      <Card>
+        <CardContent className="py-16 text-center text-muted-foreground">
+          <ClipboardList className="mx-auto h-10 w-10 mb-3 opacity-40" />
+          <p className="font-medium">Нет данных по контрольным тестам</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const avgScore = Math.round(quizzes.reduce((a, q) => a + (q.score ?? 0), 0) / quizzes.length);
+  const maxScore = Math.max(...quizzes.map(q => q.score ?? 0));
+
+  // by-subject summary
+  const subjMap: Record<string, { sum: number; count: number }> = {};
+  for (const q of quizzes) {
+    const sub = q.subject_name || "—";
+    if (!subjMap[sub]) subjMap[sub] = { sum: 0, count: 0 };
+    subjMap[sub].sum += q.score ?? 0;
+    subjMap[sub].count++;
+  }
+  const bySubject = Object.entries(subjMap).map(([name, v]) => ({
+    name, avg: Math.round(v.sum / v.count), count: v.count,
+  })).sort((a, b) => b.avg - a.avg);
+
+  // chart data — chronological
+  const chartData = [...quizzes].reverse().map(q => ({
+    date: fmtDateShort(q.date), score: q.score ?? 0, title: q.title,
+  }));
+
+  return (
+    <div className="space-y-6">
+      {/* Summary cards */}
+      <div className="grid grid-cols-3 gap-4">
+        <Card>
+          <CardContent className="pt-4 pb-4 text-center">
+            <p className="text-2xl font-bold">{quizzes.length}</p>
+            <p className="text-xs text-muted-foreground">Тестов</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-4 text-center">
+            <p className="text-2xl font-bold">{avgScore}%</p>
+            <p className="text-xs text-muted-foreground">Средний балл</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-4 text-center">
+            <p className="text-2xl font-bold">{maxScore}%</p>
+            <p className="text-xs text-muted-foreground">Лучший</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Score dynamics chart */}
+      {chartData.length > 1 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Динамика баллов</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                  <Tooltip
+                    contentStyle={{ borderRadius: 8, fontSize: 13 }}
+                    formatter={(v: number, _: any, entry: any) => [`${v}%`, entry.payload.title]}
+                  />
+                  <Line type="monotone" dataKey="score" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* By-subject breakdown */}
+      {bySubject.length > 1 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">По предметам</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {bySubject.map(sub => (
+              <div key={sub.name} className="flex items-center gap-3">
+                <div className="w-2 h-2 rounded-full" style={{ background: subjectColor(sub.name) }} />
+                <span className="text-sm flex-1 truncate">{sub.name}</span>
+                <span className="text-sm font-medium">{sub.avg}%</span>
+                <span className="text-xs text-muted-foreground">({sub.count})</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* All quizzes table */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Все контрольные</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-muted-foreground">
+                  <th className="px-4 py-2 font-medium">Дата</th>
+                  <th className="px-4 py-2 font-medium">Название</th>
+                  <th className="px-4 py-2 font-medium hidden sm:table-cell">Предмет</th>
+                  <th className="px-4 py-2 font-medium hidden md:table-cell">Преподаватель</th>
+                  <th className="px-4 py-2 font-medium text-right">Балл</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quizzes.map(q => (
+                  <tr key={q.id} className="border-b last:border-0 hover:bg-muted/50 transition-colors">
+                    <td className="px-4 py-2 whitespace-nowrap">{fmtDateShort(q.date)}</td>
+                    <td className="px-4 py-2">{q.title}</td>
+                    <td className="px-4 py-2 hidden sm:table-cell">
+                      <Badge variant="outline" className="text-xs" style={{ borderColor: subjectColor(q.subject_name || ""), color: subjectColor(q.subject_name || "") }}>
+                        {q.subject_name || "—"}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-2 text-muted-foreground hidden md:table-cell">{q.teacher_name || "—"}</td>
+                    <td className="px-4 py-2 text-right font-semibold">
+                      <span className={cn(
+                        (q.score ?? 0) >= 80 ? "text-emerald-600" : (q.score ?? 0) >= 50 ? "text-amber-600" : "text-red-500"
+                      )}>
+                        {q.score ?? 0}%
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    COMMUNICATION TAB
    ═══════════════════════════════════════════════════════════════════════════ */
 function CommunicationTab({ s }: { s: any }) {
@@ -697,7 +848,7 @@ function CommunicationTab({ s }: { s: any }) {
 /* ═══════════════════════════════════════════════════════════════════════════
    MAIN PAGE
    ═══════════════════════════════════════════════════════════════════════════ */
-type TabKey = "overview" | "attendance" | "ent" | "communication";
+type TabKey = "overview" | "attendance" | "ent" | "quizzes" | "communication";
 
 export default function Student360Page() {
   const { id } = useParams<{ id: string }>();
@@ -787,6 +938,7 @@ export default function Student360Page() {
     { key: "overview",      label: "Обзор" },
     { key: "attendance",    label: "Посещаемость" },
     { key: "ent",           label: "ЕНТ" },
+    { key: "quizzes",       label: "Контрольные" },
     { key: "communication", label: "Связь" },
   ];
 
@@ -932,6 +1084,7 @@ export default function Student360Page() {
         {tab === "overview"      && <OverviewTab s={s} />}
         {tab === "attendance"    && <AttendanceTab s={s} />}
         {tab === "ent"           && <GradesTab360 data={s} />}
+        {tab === "quizzes"       && <QuizzesTab s={s} />}
         {tab === "communication" && <CommunicationTab s={s} />}
       </div>
     </div>

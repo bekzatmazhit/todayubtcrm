@@ -269,7 +269,7 @@ function UsersTab({ toast }: { toast: ReturnType<typeof useToast>["toast"] }) {
                   {u.phone && <span className="text-xs text-muted-foreground">{formatPhone(u.phone)}</span>}
                 </div>
               </div>
-              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+              <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0">
                 <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-primary/10" onClick={() => openEdit(u)}>
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>
@@ -502,7 +502,7 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
                     {s.parent_phone && <span>Родитель: {s.parent_phone}</span>}
                   </div>
                 </div>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0">
                   <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-primary/10" onClick={() => openEdit(s)}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
@@ -680,7 +680,7 @@ function GroupsTab({ toast, users, profiles }: { toast: ReturnType<typeof useToa
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-1">
                       <p className="font-semibold text-sm">{g.name}</p>
-                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(g)}><Pencil className="h-3 w-3" /></Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setConfirmDel(g)}><Trash2 className="h-3 w-3" /></Button>
                       </div>
@@ -891,7 +891,7 @@ function SubjectsTab({ toast }: { toast: ReturnType<typeof useToast>["toast"] })
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+              <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0">
                 <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-primary/10" onClick={() => openEdit(s)}>
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>

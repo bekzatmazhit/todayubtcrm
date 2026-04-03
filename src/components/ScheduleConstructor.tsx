@@ -1,8 +1,8 @@
-﻿import { useState, useEffect, useCallback } from "react";
+﻿import { useState, useEffect, useCallback, useMemo } from "react";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { toast } from "sonner";
 import {
-  fetchSchedule, fetchGroups, fetchSubjects, fetchUsers, fetchRooms, fetchTimeSlots, createOrGetTimeSlot,
+  fetchSchedule, fetchGroups, fetchSubjects, fetchUsers, fetchRooms, fetchTimeSlots, fetchStudents, createOrGetTimeSlot,
   createScheduleEntry, updateScheduleEntry, moveScheduleEntry, deleteScheduleEntry, publishSchedule,
   type ScheduleEntry,
 } from "@/lib/api";
@@ -11,7 +11,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, X, Save, BookPlus } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
+import { Plus, X, Save, BookPlus, Check, Users, User } from "lucide-react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { UserAvatar } from "@/components/UserAvatar";
 
@@ -20,6 +22,7 @@ interface Group { id: number; name: string }
 interface Subject { id: number; name: string }
 interface Teacher { id: number; name: string; surname: string; role: string }
 interface Room { id: number; name: string }
+interface Student { id: number; full_name: string; group_id: number; group_name?: string }
 
 type ModalMode =
   | { kind: "add"; teacherId: number; slotId: number }
@@ -65,11 +68,20 @@ export default function ScheduleConstructor({ onClose }: Props) {
   const [customEnd, setCustomEnd] = useState("");
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [published, setPublished] = useState(false);
+
+  // Student picker state (for "Сводная группа" mode)
+  const [assignMode, setAssignMode] = useState<"group" | "custom">("group");
+  const [allStudents, setAllStudents] = useState<Student[]>([]);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
+  const [studentGroupFilter, setStudentGroupFilter] = useState<string>("all");
+  const [customLabel, setCustomLabel] = useState("");
+  const [studentSearch, setStudentSearch] = useState("");
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [sched, grps, subjs, usrs, rms, slots] = await Promise.all([
-      fetchSchedule(), fetchGroups(), fetchSubjects(), fetchUsers(), fetchRooms(), fetchTimeSlots(),
+    const [sched, grps, subjs, usrs, rms, slots, studs] = await Promise.all([
+      fetchSchedule(), fetchGroups(), fetchSubjects(), fetchUsers(), fetchRooms(), fetchTimeSlots(), fetchStudents(),
     ]);
     setSchedule(sched);
     setGroups(grps);
@@ -77,6 +89,9 @@ export default function ScheduleConstructor({ onClose }: Props) {
     setTeachers(usrs.filter((u: Teacher) => u.role === "teacher"));
     setRooms(rms);
     setTimeSlots(slots);
+    setAllStudents(studs.filter((s: any) => s.status === 'active').map((s: any) => ({
+      id: s.id, full_name: s.full_name, group_id: s.group_id, group_name: s.group_name,
+    })));
     setLoading(false);
   }, []);
 
@@ -90,6 +105,14 @@ export default function ScheduleConstructor({ onClose }: Props) {
   const getCell = (teacherId: number, slotId: number): ScheduleEntry | undefined =>
     view.find(s => s.teacher_id === teacherId && s.time_slot_id === slotId);
 
+  const resetPickerState = () => {
+    setAssignMode("group");
+    setSelectedStudentIds([]);
+    setCustomLabel("");
+    setStudentGroupFilter("all");
+    setStudentSearch("");
+  };
+
   const openAdd = (teacherId: number, slotId: number) => {
     setFormGroup(String(groups[0]?.id ?? ""));
     setFormSubject(String(subjects[0]?.id ?? ""));
@@ -99,6 +122,7 @@ export default function ScheduleConstructor({ onClose }: Props) {
     setSlotMode("preset");
     setCustomStart("");
     setCustomEnd("");
+    resetPickerState();
     setModal({ kind: "add", teacherId, slotId });
   };
 
@@ -111,11 +135,12 @@ export default function ScheduleConstructor({ onClose }: Props) {
     setSlotMode("preset");
     setCustomStart("");
     setCustomEnd("");
+    resetPickerState();
     setModal({ kind: "free-add" });
   };
 
   const openEdit = (entry: ScheduleEntry) => {
-    setFormGroup(String(entry.group_id));
+    setFormGroup(entry.group_id ? String(entry.group_id) : "");
     setFormSubject(String(entry.subject_id));
     setFormTeacher(String(entry.teacher_id));
     setFormCycle(entry.cycle as "PSP" | "VChS");
@@ -123,19 +148,75 @@ export default function ScheduleConstructor({ onClose }: Props) {
     setSlotMode("preset");
     setCustomStart("");
     setCustomEnd("");
+    setAssignMode(entry.group_id ? "group" : "custom");
+    setSelectedStudentIds(entry.student_ids || []);
+    setCustomLabel(entry.custom_label || "");
+    setStudentGroupFilter("all");
+    setStudentSearch("");
     setModal({ kind: "edit", entry });
   };
 
+  // Filtered students for the picker
+  const filteredStudents = useMemo(() => {
+    let list = allStudents;
+    if (studentGroupFilter !== "all") list = list.filter(s => s.group_id === Number(studentGroupFilter));
+    if (studentSearch) {
+      const q = studentSearch.toLowerCase();
+      list = list.filter(s => s.full_name.toLowerCase().includes(q));
+    }
+    return list;
+  }, [allStudents, studentGroupFilter, studentSearch]);
+
+  const toggleStudent = (id: number) => {
+    setSelectedStudentIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const toggleGroupStudents = (groupId: number) => {
+    const groupSids = allStudents.filter(s => s.group_id === groupId).map(s => s.id);
+    const allSelected = groupSids.every(id => selectedStudentIds.includes(id));
+    setSelectedStudentIds(prev => allSelected
+      ? prev.filter(id => !groupSids.includes(id))
+      : [...new Set([...prev, ...groupSids])]
+    );
+  };
+
   const handleSave = async () => {
-    if (!modal || !formGroup || !formSubject) return;
-    if (modal.kind === "free-add" && !formTeacher) {
-      toast.error("Выберите устаза");
-      return;
+    if (!modal || !formSubject) return;
+    if (assignMode === "group" && !formGroup) { toast.error("Выберите группу"); return; }
+    if (assignMode === "custom" && selectedStudentIds.length === 0) { toast.error("Выберите хотя бы одного ученика"); return; }
+    if (modal.kind === "free-add" && !formTeacher) { toast.error("Выберите устаза"); return; }
+    if (slotMode === "custom" && (!customStart || !customEnd)) { toast.error("Укажите время начала и конца урока"); return; }
+
+    // ── Frontend pre-validation: teacher overlap ──
+    const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+    const overlaps = (a: { start_time: string; end_time: string }, b: { start_time: string; end_time: string }) =>
+      toMin(a.start_time) < toMin(b.end_time) && toMin(a.end_time) > toMin(b.start_time);
+
+    let newSlot: { start_time: string; end_time: string } | undefined;
+    if (slotMode === "custom") {
+      newSlot = { start_time: customStart, end_time: customEnd };
+    } else {
+      const slotId = modal.kind === "add" ? modal.slotId : modal.kind === "edit" ? modal.entry.time_slot_id : Number(formPresetSlot);
+      newSlot = timeSlots.find(ts => ts.id === slotId);
     }
-    if (slotMode === "custom" && (!customStart || !customEnd)) {
-      toast.error("Укажите время начала и конца урока");
-      return;
+
+    if (newSlot) {
+      const targetCycle = modal.kind === "free-add" ? formCycle : cycle;
+      const cycleView = schedule.filter(s => s.cycle === targetCycle);
+      const excludeId = modal.kind === "edit" ? modal.entry.id : undefined;
+      const teacherId = modal.kind === "add" ? modal.teacherId : modal.kind === "edit" ? modal.entry.teacher_id : Number(formTeacher);
+
+      for (const s of cycleView) {
+        if (excludeId && s.id === excludeId) continue;
+        const slot = timeSlots.find(ts => ts.id === s.time_slot_id);
+        if (!slot || !overlaps(newSlot, slot)) continue;
+        if (s.teacher_id === teacherId) {
+          toast.error(`Конфликт: У преподавателя ${s.teacher_name} уже стоит занятие «${s.subject_name}» (${s.group_name}) с ${slot.start_time} до ${slot.end_time}`);
+          return;
+        }
+      }
     }
+
     setSaving(true);
     try {
       let resolvedSlotId: number;
@@ -148,35 +229,24 @@ export default function ScheduleConstructor({ onClose }: Props) {
         else resolvedSlotId = Number(formPresetSlot);
       }
 
+      // Build the payload based on assign mode
+      const basePayload = {
+        subject_id: Number(formSubject),
+        room_id: rooms[0]?.id ?? 1,
+        time_slot_id: resolvedSlotId,
+        ...(assignMode === "group"
+          ? { group_id: Number(formGroup) }
+          : { group_id: null, student_ids: selectedStudentIds, custom_label: customLabel || undefined }),
+      };
+
       if (modal.kind === "add") {
-        await createScheduleEntry({
-          group_id: Number(formGroup),
-          subject_id: Number(formSubject),
-          teacher_id: modal.teacherId,
-          room_id: rooms[0]?.id ?? 1,
-          time_slot_id: resolvedSlotId,
-          cycle,
-        });
+        await createScheduleEntry({ ...basePayload, teacher_id: modal.teacherId, cycle });
         toast.success("Урок добавлен");
       } else if (modal.kind === "free-add") {
-        await createScheduleEntry({
-          group_id: Number(formGroup),
-          subject_id: Number(formSubject),
-          teacher_id: Number(formTeacher),
-          room_id: rooms[0]?.id ?? 1,
-          time_slot_id: resolvedSlotId,
-          cycle: formCycle,
-        });
+        await createScheduleEntry({ ...basePayload, teacher_id: Number(formTeacher), cycle: formCycle });
         toast.success("Урок добавлен в расписание");
       } else {
-        await updateScheduleEntry(modal.entry.id, {
-          group_id: Number(formGroup),
-          subject_id: Number(formSubject),
-          teacher_id: modal.entry.teacher_id,
-          room_id: modal.entry.room_id,
-          time_slot_id: resolvedSlotId,
-          cycle: modal.entry.cycle,
-        });
+        await updateScheduleEntry(modal.entry.id, { ...basePayload, teacher_id: modal.entry.teacher_id, cycle: modal.entry.cycle });
         toast.success("Урок обновлён");
       }
       setModal(null);
@@ -194,9 +264,11 @@ export default function ScheduleConstructor({ onClose }: Props) {
       const result = await publishSchedule(cycle);
       toast.success(`Расписание сохранено и отправлено ${result.notified} преподавателям`);
     } catch {
-      toast.error("Не удалось отправить уведомления");
+      toast.success("Расписание сохранено");
     } finally {
       setPublishing(false);
+      setPublished(true);
+      setTimeout(() => onClose(), 900);
     }
   };
 
@@ -223,17 +295,34 @@ export default function ScheduleConstructor({ onClose }: Props) {
     const entry = schedule.find(s => s.id === entryId);
     if (!entry) return;
 
-    // Guard: target teacher's cell already occupied (by a different entry)
-    const teacherOccupied = view.find(s => s.teacher_id === newTeacherId && s.time_slot_id === newSlotId && s.id !== entryId);
+    // Helper: find the time slot object by id
+    const newSlot = timeSlots.find(ts => ts.id === newSlotId);
+    if (!newSlot) return;
+    const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+    const overlaps = (a: { start_time: string; end_time: string }, b: { start_time: string; end_time: string }) =>
+      toMin(a.start_time) < toMin(b.end_time) && toMin(a.end_time) > toMin(b.start_time);
+
+    // Guard: teacher already has an overlapping lesson
+    const teacherOccupied = view.find(s => {
+      if (s.id === entryId || s.teacher_id !== newTeacherId) return false;
+      const slot = timeSlots.find(ts => ts.id === s.time_slot_id);
+      return slot && overlaps(newSlot, slot);
+    });
     if (teacherOccupied) {
-      toast.error("Учитель уже занят в это время");
+      const occSlot = timeSlots.find(ts => ts.id === teacherOccupied.time_slot_id);
+      toast.error(`Конфликт: У преподавателя ${teacherOccupied.teacher_name} уже стоит занятие «${teacherOccupied.subject_name}» (${teacherOccupied.group_name}) с ${occSlot?.start_time} до ${occSlot?.end_time}`);
       return;
     }
 
-    // Guard: same group already has a lesson in that time slot (by a different entry)
-    const groupOccupied = view.find(s => s.group_id === entry.group_id && s.time_slot_id === newSlotId && s.id !== entryId);
+    // Guard: same group already has an overlapping lesson
+    const groupOccupied = view.find(s => {
+      if (s.id === entryId || s.group_id !== entry.group_id) return false;
+      const slot = timeSlots.find(ts => ts.id === s.time_slot_id);
+      return slot && overlaps(newSlot, slot);
+    });
     if (groupOccupied) {
-      toast.error(`Группа уже занята в это время (${groupOccupied.group_name} — ${groupOccupied.subject_name})`);
+      const occSlot = timeSlots.find(ts => ts.id === groupOccupied.time_slot_id);
+      toast.error(`Конфликт: У группы ${groupOccupied.group_name} уже есть урок «${groupOccupied.subject_name}» с ${occSlot?.start_time} до ${occSlot?.end_time}`);
       return;
     }
 
@@ -305,11 +394,20 @@ export default function ScheduleConstructor({ onClose }: Props) {
           <Button
             size="sm"
             onClick={handlePublish}
-            disabled={publishing}
-            className="h-8 px-3 text-sm bg-emerald-600 hover:bg-emerald-700 text-white dark:bg-emerald-500 dark:hover:bg-emerald-600 gap-1.5"
+            disabled={publishing || published}
+            className={[
+              "h-8 px-3 text-sm gap-1.5 transition-all duration-300",
+              published
+                ? "bg-emerald-500 hover:bg-emerald-500 text-white dark:bg-emerald-400 dark:hover:bg-emerald-400 scale-105"
+                : "bg-emerald-600 hover:bg-emerald-700 text-white dark:bg-emerald-500 dark:hover:bg-emerald-600",
+            ].join(" ")}
           >
-            <Save className="h-3.5 w-3.5" />
-            {publishing ? "Отправка…" : "Сохранить"}
+            {published ? (
+              <Check className="h-4 w-4 animate-scale-in" />
+            ) : (
+              <Save className="h-3.5 w-3.5" />
+            )}
+            {publishing ? "Отправка…" : published ? "Готово" : "Сохранить"}
           </Button>
           <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
             <X className="h-4 w-4" />
@@ -405,7 +503,7 @@ export default function ScheduleConstructor({ onClose }: Props) {
                                           ? "text-zinc-100 dark:text-zinc-900"
                                           : "text-zinc-900 dark:text-zinc-100"
                                       }`}>
-                                        {entry.group_name}
+                                        {entry.group_name || entry.custom_label || "Сводная"}
                                       </p>
                                       {/* Subject (secondary) */}
                                       <p className={`text-[11px] leading-tight mt-0.5 truncate ${
@@ -449,7 +547,7 @@ export default function ScheduleConstructor({ onClose }: Props) {
 
       {/* Add / Edit dialog */}
       <Dialog open={!!modal} onOpenChange={open => !open && setModal(null)}>
-        <DialogContent className="sm:max-w-xs">
+        <DialogContent className={assignMode === "custom" ? "sm:max-w-md" : "sm:max-w-xs"}>
           <DialogHeader>
             <DialogTitle className="text-sm">
               {modal?.kind === "edit" ? "Изменить урок" : "Добавить урок"}
@@ -457,15 +555,90 @@ export default function ScheduleConstructor({ onClose }: Props) {
           </DialogHeader>
           {modal && (
             <div className="space-y-3 py-1">
+              {/* Assign mode toggle */}
               <div className="space-y-1.5">
-                <Label className="text-xs text-zinc-500">Группа</Label>
-                <Select value={formGroup} onValueChange={setFormGroup}>
-                  <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Выберите группу" /></SelectTrigger>
-                  <SelectContent>
-                    {groups.map(g => <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <Label className="text-xs text-zinc-500">Назначение</Label>
+                <div className="flex rounded-md overflow-hidden border border-zinc-200 dark:border-zinc-700 text-xs font-medium">
+                  <button
+                    onClick={() => setAssignMode("group")}
+                    className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 transition-colors ${assignMode === "group" ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900" : "bg-white dark:bg-zinc-900 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
+                  >
+                    <Users className="h-3.5 w-3.5" /> Группа
+                  </button>
+                  <button
+                    onClick={() => setAssignMode("custom")}
+                    className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 border-l border-zinc-200 dark:border-zinc-700 transition-colors ${assignMode === "custom" ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900" : "bg-white dark:bg-zinc-900 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
+                  >
+                    <User className="h-3.5 w-3.5" /> Сводная группа
+                  </button>
+                </div>
               </div>
+
+              {/* Group select (group mode) */}
+              {assignMode === "group" && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-zinc-500">Группа</Label>
+                  <Select value={formGroup} onValueChange={setFormGroup}>
+                    <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Выберите группу" /></SelectTrigger>
+                    <SelectContent>
+                      {groups.map(g => <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {/* Student picker (custom mode) */}
+              {assignMode === "custom" && (
+                <div className="space-y-2">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-zinc-500">Название (необязательно)</Label>
+                    <Input className="h-8 text-sm" placeholder="Например: Олимпиадники" value={customLabel} onChange={e => setCustomLabel(e.target.value)} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs text-zinc-500">Ученики</Label>
+                      {selectedStudentIds.length > 0 && (
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{selectedStudentIds.length} выбрано</Badge>
+                      )}
+                    </div>
+                    {/* Group filter + search */}
+                    <div className="flex gap-1.5">
+                      <Select value={studentGroupFilter} onValueChange={setStudentGroupFilter}>
+                        <SelectTrigger className="h-8 text-xs flex-1"><SelectValue placeholder="Все группы" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Все группы</SelectItem>
+                          {groups.map(g => <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <Input className="h-8 text-xs flex-1" placeholder="Поиск…" value={studentSearch} onChange={e => setStudentSearch(e.target.value)} />
+                    </div>
+                    {/* Quick select per group */}
+                    {studentGroupFilter !== "all" && (
+                      <button
+                        type="button"
+                        className="text-[10px] text-blue-500 hover:text-blue-600 dark:text-blue-400"
+                        onClick={() => toggleGroupStudents(Number(studentGroupFilter))}
+                      >
+                        {allStudents.filter(s => s.group_id === Number(studentGroupFilter)).every(s => selectedStudentIds.includes(s.id))
+                          ? "Снять всю группу"
+                          : "Выбрать всю группу"}
+                      </button>
+                    )}
+                    {/* Student list */}
+                    <div className="max-h-40 overflow-y-auto border border-zinc-200 dark:border-zinc-700 rounded-md divide-y divide-zinc-100 dark:divide-zinc-800">
+                      {filteredStudents.length === 0 ? (
+                        <p className="text-xs text-zinc-400 text-center py-3">Нет учеников</p>
+                      ) : filteredStudents.map(s => (
+                        <label key={s.id} className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
+                          <Checkbox checked={selectedStudentIds.includes(s.id)} onCheckedChange={() => toggleStudent(s.id)} />
+                          <span className="text-xs flex-1 truncate">{s.full_name}</span>
+                          {s.group_name && <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">{s.group_name}</Badge>}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label className="text-xs text-zinc-500">Предмет</Label>
                 <Select value={formSubject} onValueChange={setFormSubject}>
@@ -572,7 +745,7 @@ export default function ScheduleConstructor({ onClose }: Props) {
             <Button
               size="sm"
               onClick={handleSave}
-              disabled={saving || !formGroup || !formSubject}
+              disabled={saving || !formSubject || (assignMode === "group" ? !formGroup : selectedStudentIds.length === 0)}
               className="bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
             >
               {saving ? "…" : modal?.kind === "edit" ? "Сохранить" : "Добавить"}
