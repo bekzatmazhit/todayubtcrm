@@ -1,15 +1,17 @@
 ﻿import { useState, useEffect, useCallback } from "react";
+import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { toast } from "sonner";
 import {
-  fetchSchedule, fetchGroups, fetchSubjects, fetchUsers, fetchRooms, fetchTimeSlots,
+  fetchSchedule, fetchGroups, fetchSubjects, fetchUsers, fetchRooms, fetchTimeSlots, createOrGetTimeSlot,
   createScheduleEntry, updateScheduleEntry, moveScheduleEntry, deleteScheduleEntry, publishSchedule,
   type ScheduleEntry,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, X, Save } from "lucide-react";
+import { Plus, X, Save, BookPlus } from "lucide-react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { UserAvatar } from "@/components/UserAvatar";
 
@@ -22,6 +24,7 @@ interface Room { id: number; name: string }
 type ModalMode =
   | { kind: "add"; teacherId: number; slotId: number }
   | { kind: "edit"; entry: ScheduleEntry }
+  | { kind: "free-add" }
   | null;
 
 interface Props { onClose: () => void }
@@ -54,6 +57,12 @@ export default function ScheduleConstructor({ onClose }: Props) {
   const [modal, setModal] = useState<ModalMode>(null);
   const [formGroup, setFormGroup] = useState("");
   const [formSubject, setFormSubject] = useState("");
+  const [formTeacher, setFormTeacher] = useState("");
+  const [formCycle, setFormCycle] = useState<"PSP" | "VChS">("PSP");
+  const [slotMode, setSlotMode] = useState<"preset" | "custom">("preset");
+  const [formPresetSlot, setFormPresetSlot] = useState("");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
 
@@ -75,42 +84,97 @@ export default function ScheduleConstructor({ onClose }: Props) {
 
   const view = schedule.filter(s => s.cycle === cycle);
 
+  // Only show time slots that have at least one lesson in current cycle
+  const activeTimeSlots = timeSlots.filter(slot => view.some(s => s.time_slot_id === slot.id));
+
   const getCell = (teacherId: number, slotId: number): ScheduleEntry | undefined =>
     view.find(s => s.teacher_id === teacherId && s.time_slot_id === slotId);
 
   const openAdd = (teacherId: number, slotId: number) => {
     setFormGroup(String(groups[0]?.id ?? ""));
     setFormSubject(String(subjects[0]?.id ?? ""));
+    setFormTeacher(String(teacherId));
+    setFormCycle(cycle);
+    setFormPresetSlot(String(slotId));
+    setSlotMode("preset");
+    setCustomStart("");
+    setCustomEnd("");
     setModal({ kind: "add", teacherId, slotId });
+  };
+
+  const openFreeAdd = () => {
+    setFormGroup(String(groups[0]?.id ?? ""));
+    setFormSubject(String(subjects[0]?.id ?? ""));
+    setFormTeacher(String(teachers[0]?.id ?? ""));
+    setFormCycle(cycle);
+    setFormPresetSlot(String(timeSlots[0]?.id ?? ""));
+    setSlotMode("preset");
+    setCustomStart("");
+    setCustomEnd("");
+    setModal({ kind: "free-add" });
   };
 
   const openEdit = (entry: ScheduleEntry) => {
     setFormGroup(String(entry.group_id));
     setFormSubject(String(entry.subject_id));
+    setFormTeacher(String(entry.teacher_id));
+    setFormCycle(entry.cycle as "PSP" | "VChS");
+    setFormPresetSlot(String(entry.time_slot_id));
+    setSlotMode("preset");
+    setCustomStart("");
+    setCustomEnd("");
     setModal({ kind: "edit", entry });
   };
 
   const handleSave = async () => {
     if (!modal || !formGroup || !formSubject) return;
+    if (modal.kind === "free-add" && !formTeacher) {
+      toast.error("Выберите устаза");
+      return;
+    }
+    if (slotMode === "custom" && (!customStart || !customEnd)) {
+      toast.error("Укажите время начала и конца урока");
+      return;
+    }
     setSaving(true);
     try {
+      let resolvedSlotId: number;
+      if (slotMode === "custom") {
+        const slot = await createOrGetTimeSlot(customStart, customEnd);
+        resolvedSlotId = slot.id;
+      } else {
+        if (modal.kind === "add") resolvedSlotId = modal.slotId;
+        else if (modal.kind === "edit") resolvedSlotId = modal.entry.time_slot_id;
+        else resolvedSlotId = Number(formPresetSlot);
+      }
+
       if (modal.kind === "add") {
         await createScheduleEntry({
           group_id: Number(formGroup),
           subject_id: Number(formSubject),
           teacher_id: modal.teacherId,
           room_id: rooms[0]?.id ?? 1,
-          time_slot_id: modal.slotId,
+          time_slot_id: resolvedSlotId,
           cycle,
         });
         toast.success("Урок добавлен");
+      } else if (modal.kind === "free-add") {
+        await createScheduleEntry({
+          group_id: Number(formGroup),
+          subject_id: Number(formSubject),
+          teacher_id: Number(formTeacher),
+          room_id: rooms[0]?.id ?? 1,
+          time_slot_id: resolvedSlotId,
+          cycle: formCycle,
+        });
+        toast.success("Урок добавлен в расписание");
       } else {
         await updateScheduleEntry(modal.entry.id, {
           group_id: Number(formGroup),
           subject_id: Number(formSubject),
           teacher_id: modal.entry.teacher_id,
           room_id: modal.entry.room_id,
-          time_slot_id: modal.entry.time_slot_id,
+          time_slot_id: resolvedSlotId,
           cycle: modal.entry.cycle,
         });
         toast.success("Урок обновлён");
@@ -218,6 +282,10 @@ export default function ScheduleConstructor({ onClose }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={openFreeAdd} className="h-8 px-3 text-sm gap-1.5">
+            <BookPlus className="h-3.5 w-3.5" />
+            Добавить урок
+          </Button>
           {/* Cycle toggle */}
           <div className="flex rounded-md overflow-hidden border border-zinc-200 dark:border-zinc-700 text-sm font-medium">
             {(["PSP", "VChS"] as const).map(c => (
@@ -278,7 +346,7 @@ export default function ScheduleConstructor({ onClose }: Props) {
               </tr>
             </thead>
             <tbody>
-              {timeSlots.map(slot => (
+              {activeTimeSlots.map(slot => (
                 <tr key={slot.id}>
                   <td className="sticky left-0 z-10 bg-white dark:bg-zinc-950 border-b border-r border-zinc-200 dark:border-zinc-800 p-3">
                     <div className="text-sm font-bold text-zinc-800 dark:text-zinc-200 tabular-nums">{slot.start_time}</div>
@@ -394,7 +462,7 @@ export default function ScheduleConstructor({ onClose }: Props) {
                 <Select value={formGroup} onValueChange={setFormGroup}>
                   <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Выберите группу" /></SelectTrigger>
                   <SelectContent>
-                    {groups.map(g => <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>)}
+                    {groups.map(g => <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -407,24 +475,96 @@ export default function ScheduleConstructor({ onClose }: Props) {
                   </SelectContent>
                 </Select>
               </div>
-              {/* Context info */}
-              <div className="rounded-md bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-3 py-2.5 space-y-1">
-                <p className="text-xs text-zinc-500">
-                  <span className="font-medium text-zinc-700 dark:text-zinc-300">Учитель: </span>
-                  {modal.kind === "add" ? teacherName(modal.teacherId) : modal.entry.teacher_name}
-                </p>
-                <p className="text-xs text-zinc-500">
-                  <span className="font-medium text-zinc-700 dark:text-zinc-300">Слот: </span>
-                  {modal.kind === "add"
-                    ? (() => { const s = timeSlots.find(ts => ts.id === modal.slotId); return s ? `${s.start_time} – ${s.end_time}` : ""; })()
-                    : (() => { const s = timeSlots.find(ts => ts.id === modal.entry.time_slot_id); return s ? `${s.start_time} – ${s.end_time}` : ""; })()
-                  }
-                </p>
-                <p className="text-xs text-zinc-500">
-                  <span className="font-medium text-zinc-700 dark:text-zinc-300">Цикл: </span>
-                  {cycle === "PSP" ? "ПСП (пн/ср/пт)" : "ВЧС (вт/чт/сб)"}
-                </p>
+
+              {/* Time slot mode toggle */}
+              <div className="space-y-1.5">
+                <Label className="text-xs text-zinc-500">Время урока</Label>
+                <div className="flex rounded-md overflow-hidden border border-zinc-200 dark:border-zinc-700 text-xs font-medium">
+                  <button
+                    onClick={() => setSlotMode("preset")}
+                    className={`flex-1 px-3 py-1.5 transition-colors ${slotMode === "preset" ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900" : "bg-white dark:bg-zinc-900 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
+                  >
+                    Базовый слот
+                  </button>
+                  <button
+                    onClick={() => setSlotMode("custom")}
+                    className={`flex-1 px-3 py-1.5 border-l border-zinc-200 dark:border-zinc-700 transition-colors ${slotMode === "custom" ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900" : "bg-white dark:bg-zinc-900 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
+                  >
+                    Своё время
+                  </button>
+                </div>
+                {slotMode === "preset" ? (
+                  modal.kind === "free-add" ? (
+                    <Select value={formPresetSlot} onValueChange={setFormPresetSlot}>
+                      <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Выберите слот" /></SelectTrigger>
+                      <SelectContent>
+                        {timeSlots.map(s => (
+                          <SelectItem key={s.id} value={String(s.id)}>
+                            {s.start_time} – {s.end_time}{s.label ? ` (${s.label})` : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                  <p className="text-xs text-zinc-400 dark:text-zinc-500 px-1">
+                    {(() => {
+                      const slotId = modal.kind === "add" ? modal.slotId : modal.entry.time_slot_id;
+                      const s = timeSlots.find(ts => ts.id === slotId);
+                      return s ? `${s.start_time} – ${s.end_time}${s.label ? ` (${s.label})` : ""}` : "—";
+                    })()}
+                  </p>
+                  )
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 space-y-1">
+                      <Label className="text-[10px] text-zinc-400">Начало</Label>
+                      <Input type="time" className="h-8 text-sm" value={customStart} onChange={e => setCustomStart(e.target.value)} />
+                    </div>
+                    <span className="text-zinc-400 mt-5">–</span>
+                    <div className="flex-1 space-y-1">
+                      <Label className="text-[10px] text-zinc-400">Конец</Label>
+                      <Input type="time" className="h-8 text-sm" value={customEnd} onChange={e => setCustomEnd(e.target.value)} />
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {/* Context info */}
+              {modal.kind === "free-add" ? (
+                <>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-zinc-500">Устаз</Label>
+                    <Select value={formTeacher} onValueChange={setFormTeacher}>
+                      <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Выберите устаза" /></SelectTrigger>
+                      <SelectContent>
+                        {teachers.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name} {t.surname}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-zinc-500">Цикл</Label>
+                    <div className="flex rounded-md overflow-hidden border border-zinc-200 dark:border-zinc-700 text-xs font-medium">
+                      {(["PSP", "VChS"] as const).map(c => (
+                        <button key={c} onClick={() => setFormCycle(c)}
+                          className={`flex-1 px-3 py-1.5 transition-colors ${formCycle === c ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900" : "bg-white dark:bg-zinc-900 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"}`}>
+                          {c === "PSP" ? "ПСП (пн/ср/пт)" : "ВЧС (вт/чт/сб)"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="rounded-md bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-3 py-2.5 space-y-1">
+                  <p className="text-xs text-zinc-500">
+                    <span className="font-medium text-zinc-700 dark:text-zinc-300">Учитель: </span>
+                    {modal.kind === "add" ? teacherName(modal.teacherId) : modal.entry.teacher_name}
+                  </p>
+                  <p className="text-xs text-zinc-500">
+                    <span className="font-medium text-zinc-700 dark:text-zinc-300">Цикл: </span>
+                    {cycle === "PSP" ? "ПСП (пн/ср/пт)" : "ВЧС (вт/чт/сб)"}
+                  </p>
+                </div>
+              )}
             </div>
           )}
           <DialogFooter className="gap-2">

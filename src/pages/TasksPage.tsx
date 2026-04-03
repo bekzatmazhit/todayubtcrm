@@ -27,6 +27,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { UserAvatar } from "@/components/UserAvatar";
 import { MentionInput, RenderMentionText } from "@/components/MentionInput";
 import { clearDraft } from "@/lib/drafts";
+import i18n from "@/lib/i18n";
 import {
   fetchTasks, createTask, updateTask, deleteTask, fetchUsers,
   fetchTaskAttachments, uploadTaskAttachment, deleteTaskAttachment,
@@ -69,10 +70,12 @@ function isOverdue(due: string | null, status: string) {
 }
 function fmtDate(d: string | null) {
   if (!d) return null;
-  return new Date(d).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" });
+  const locale = { ru: "ru-RU", kk: "kk-KZ", en: "en-US" }[i18n.language] ?? "ru-RU";
+  return new Date(d).toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric" });
 }
 function fmtDateTime(d: string) {
-  return new Date(d).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  const locale = { ru: "ru-RU", kk: "kk-KZ", en: "en-US" }[i18n.language] ?? "ru-RU";
+  return new Date(d).toLocaleString(locale, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 function relTime(d: string) {
   const diff = Date.now() - new Date(d).getTime();

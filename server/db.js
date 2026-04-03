@@ -452,6 +452,30 @@ export function initializeDatabase() {
     );
   `);
 
+  // Quiz / контрольный тест tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS quizzes (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      schedule_id INTEGER,
+      date        TEXT NOT NULL,
+      title       TEXT NOT NULL,
+      created_by  INTEGER,
+      created_at  TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY(schedule_id) REFERENCES schedule(id) ON DELETE SET NULL,
+      FOREIGN KEY(created_by)  REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS quiz_results (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      quiz_id    INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      score      REAL,
+      FOREIGN KEY(quiz_id)    REFERENCES quizzes(id) ON DELETE CASCADE,
+      FOREIGN KEY(student_id) REFERENCES students(id),
+      UNIQUE(quiz_id, student_id)
+    );
+  `);
+
   // Chat tables
   db.exec(`
     CREATE TABLE IF NOT EXISTS chat_messages (

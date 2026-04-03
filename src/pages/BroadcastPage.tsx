@@ -16,6 +16,7 @@ import {
 import { UserAvatar } from "@/components/UserAvatar";
 import { RelativeTime } from "@/components/RelativeTime";
 import { Skeleton } from "@/components/ui/skeleton";
+import i18n from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
 import {
   Radio, Plus, CheckCheck, Eye, Trash2, AlertTriangle, Info, AlertCircle,
@@ -29,7 +30,8 @@ const PRIORITY_CONFIG = {
 };
 
 function fmtDate(d: string) {
-  return new Date(d).toLocaleString("ru-RU", {
+  const locale = { ru: "ru-RU", kk: "kk-KZ", en: "en-US" }[i18n.language] ?? "ru-RU";
+  return new Date(d).toLocaleString(locale, {
     day: "2-digit", month: "2-digit", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   });

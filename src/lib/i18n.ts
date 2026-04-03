@@ -127,7 +127,18 @@ const resources = {
       "Failed to delete student": "Ошибка при удалении студента",
       "Group name is required": "Требуется название группы",
       "Student name is required": "Требуется имя студента",
-      "Are you sure you want to delete this student?": "Вы уверены, что хотите удалить этого студента?"
+      "Are you sure you want to delete this student?": "Вы уверены, что хотите удалить этого студента?",
+      "Docs": "Документы",
+      "Knowledge Base": "База знаний",
+      "Schedule Constructor": "Конструктор расписания",
+      "Tasks for Today": "Задачи на сегодня",
+      "No tasks for today": "Нет задач на сегодня",
+      "Show tasks": "Показать задачи",
+      "Hide tasks": "Скрыть задачи",
+      "Failed to load schedule": "Ошибка загрузки расписания",
+      "Undo": "Отмена",
+      "По учителям": "По учителям",
+      "По группам": "По группам"
     }
   },
   kk: {
@@ -243,7 +254,18 @@ const resources = {
       "Failed to delete student": "Студент жою сәтсіз болды",
       "Group name is required": "Топ атауы міндетті",
       "Student name is required": "Студенттің аты міндетті",
-      "Are you sure you want to delete this student?": "Бұл студентті жойғыңыз келе ме?"
+      "Are you sure you want to delete this student?": "Бұл студентті жойғыңыз келе ме?",
+      "Docs": "Ңұжаттар",
+      "Knowledge Base": "Білім қоры",
+      "Schedule Constructor": "Кесте құрастырушы",
+      "Tasks for Today": "Бүгінгі тапсырмалар",
+      "No tasks for today": "Бүгін тапсырмалар жоқ",
+      "Show tasks": "Тапсырмаларды көрсету",
+      "Hide tasks": "Тапсырмаларды жасыру",
+      "Failed to load schedule": "Кестені жүктеу сәтсіз болды",
+      "Undo": "Болдырмау",
+      "По учителям": "Ұстаздар бойынша",
+      "По группам": "Топтар бойынша"
     }
   },
   en: {
@@ -357,7 +379,18 @@ const resources = {
       "Failed to delete student": "Failed to delete student",
       "Group name is required": "Group name is required",
       "Student name is required": "Student name is required",
-      "Are you sure you want to delete this student?": "Are you sure you want to delete this student?"
+      "Are you sure you want to delete this student?": "Are you sure you want to delete this student?",
+      "Docs": "Docs",
+      "Knowledge Base": "Knowledge Base",
+      "Schedule Constructor": "Schedule Constructor",
+      "Tasks for Today": "Tasks for Today",
+      "No tasks for today": "No tasks for today",
+      "Show tasks": "Show tasks",
+      "Hide tasks": "Hide tasks",
+      "Failed to load schedule": "Failed to load schedule",
+      "Undo": "Undo",
+      "По учителям": "By Teachers",
+      "По группам": "By Groups"
     }
   }
 };

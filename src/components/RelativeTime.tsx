@@ -1,7 +1,10 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-function getRelative(date: Date): string {
+const LOCALE_MAP: Record<string, string> = { ru: "ru-RU", kk: "kk-KZ", en: "en-US" };
+
+function getRelative(date: Date, locale: string): string {
   const now = Date.now();
   const diff = now - date.getTime();
   const sec = Math.floor(diff / 1000);
@@ -22,11 +25,11 @@ function getRelative(date: Date): string {
     const m = Math.floor(days / 30);
     return `${m} мес. назад`;
   }
-  return date.toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" });
+  return date.toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric" });
 }
 
-function formatExact(date: Date): string {
-  return date.toLocaleString("ru-RU", {
+function formatExact(date: Date, locale: string): string {
+  return date.toLocaleString(locale, {
     day: "2-digit", month: "2-digit", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   });
@@ -38,14 +41,16 @@ interface Props {
 }
 
 export function RelativeTime({ date, className }: Props) {
+  const { i18n } = useTranslation();
+  const locale = LOCALE_MAP[i18n.language] ?? "ru-RU";
   const parsed = date instanceof Date ? date : new Date(date);
-  const [text, setText] = useState(() => getRelative(parsed));
+  const [text, setText] = useState(() => getRelative(parsed, locale));
 
   useEffect(() => {
-    setText(getRelative(parsed));
-    const id = setInterval(() => setText(getRelative(parsed)), 60_000);
+    setText(getRelative(parsed, locale));
+    const id = setInterval(() => setText(getRelative(parsed, locale)), 60_000);
     return () => clearInterval(id);
-  }, [parsed.getTime()]);
+  }, [parsed.getTime(), locale]);
 
   return (
     <Tooltip>
@@ -53,7 +58,7 @@ export function RelativeTime({ date, className }: Props) {
         <span className={className} style={{ cursor: "default" }}>{text}</span>
       </TooltipTrigger>
       <TooltipContent side="top" className="text-xs">
-        {formatExact(parsed)}
+        {formatExact(parsed, locale)}
       </TooltipContent>
     </Tooltip>
   );

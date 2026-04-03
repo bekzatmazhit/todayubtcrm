@@ -1,8 +1,11 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+﻿import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
+import * as XLSX from "xlsx";
 import {
   BarChart3, Users, TrendingUp, Edit, ArrowUp, ArrowDown, Minus,
   Trophy, Medal, Crown, Filter, ChevronsUpDown, ChevronUp, ChevronDown,
   Target, Star, Award, Flame, Hash, BookOpen,
+  Upload, Download, FileText, PenLine, TableIcon, CheckCircle2, X,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,14 +18,15 @@ import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend,
   ResponsiveContainer, Area, AreaChart, BarChart, Bar,
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Cell, LabelList,
 } from "recharts";
 import { useAuth } from "@/contexts/AuthContext";
-import { fetchEntResults, fetchGroups, saveEntResultsBatch } from "@/lib/api";
+import { fetchEntResults, fetchGroups, saveEntResultsBatch, fetchStudents } from "@/lib/api";
 
 /* ══════ Constants ══════ */
 
@@ -40,9 +44,17 @@ const ACADEMIC_MONTHS = [
   { value: "2026-05", label: "Май", short: "Май" },
 ];
 
+const REAL_EXAM_TYPES = [
+  { value: "1000-01", label: "Январьский реальный ЕНТ", short: "Янв.ЕНТ" },
+  { value: "1000-03", label: "Мартовский реальный ЕНТ", short: "Мар.ЕНТ" },
+  { value: "1001-01", label: "Грантовский 1", short: "Грант 1" },
+  { value: "1001-02", label: "Грантовский 2", short: "Грант 2" },
+];
+
 const MONTH_LABELS: Record<string, string> = {};
 const MONTH_SHORT: Record<string, string> = {};
 for (const m of ACADEMIC_MONTHS) { MONTH_LABELS[m.value] = m.label; MONTH_SHORT[m.value] = m.short; }
+for (const m of REAL_EXAM_TYPES) { MONTH_LABELS[m.value] = m.label; MONTH_SHORT[m.value] = m.short; }
 
 // Profile → 5 ENT subjects (3 mandatory + 2 profile)
 // История: max 20, Чтение: max 10, Мат.грам: max 10, Профильные: max 50
@@ -113,6 +125,446 @@ interface StudentRow {
   scores: Record<number, number>; total: number;
 }
 
+/* ══════ Real ENT Dialog (Manual + CSV) ══════ */
+
+interface ParsedRow {
+  name: string;
+  studentId: number | null;
+  scores: Record<number, number | "">;
+  errors: string[];
+}
+
+type EntryMode = "manual" | "csv";
+
+function RealEntImportDialog({ open, onOpenChange, groups, onSuccess }: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  groups: any[];
+  onSuccess: () => void;
+}) {
+  const [mode, setMode] = useState<EntryMode>("manual");
+  const [groupId, setGroupId] = useState("");
+  const [examType, setExamType] = useState(REAL_EXAM_TYPES[0].value);
+  const [students, setStudents] = useState<{ id: number; full_name: string }[]>([]);
+
+  // Manual mode state
+  const [manualValues, setManualValues] = useState<Record<number, Record<number, string>>>({});
+  const [savedStudents, setSavedStudents] = useState<Set<number>>(new Set());
+  const [manualSaving, setManualSaving] = useState<number | null>(null);
+
+  // CSV mode state
+  const [csvText, setCsvText] = useState("");
+  const [parseResult, setParseResult] = useState<ParsedRow[] | null>(null);
+  const [csvSaving, setCsvSaving] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const selectedGroup = groups.find((g: any) => String(g.id) === groupId);
+  const profileId: number = selectedGroup?.profile_id || 1;
+  const subjects = ENT_PROFILE_SUBJECTS[profileId] || ENT_PROFILE_SUBJECTS[1];
+
+  // Load students when group changes
+  useEffect(() => {
+    if (!groupId) { setStudents([]); setManualValues({}); setSavedStudents(new Set()); return; }
+    fetchStudents().then((all: any[]) => {
+      const filtered = all.filter(s => String(s.group_id) === groupId);
+      setStudents(filtered);
+      // Init empty manual values
+      const init: Record<number, Record<number, string>> = {};
+      for (const st of filtered) {
+        init[st.id] = {};
+        for (const subj of ENT_PROFILE_SUBJECTS[profileId] || ENT_PROFILE_SUBJECTS[1]) {
+          init[st.id][subj.id] = "";
+        }
+      }
+      setManualValues(init);
+      setSavedStudents(new Set());
+    });
+  }, [groupId]);
+
+  // Re-init manual values cols when profile changes (group changes)
+  useEffect(() => {
+    if (students.length === 0) return;
+    setManualValues(prev => {
+      const next: Record<number, Record<number, string>> = {};
+      for (const st of students) {
+        next[st.id] = {};
+        for (const subj of subjects) {
+          next[st.id][subj.id] = prev[st.id]?.[subj.id] ?? "";
+        }
+      }
+      return next;
+    });
+  }, [subjects]);
+
+  // Reset on close
+  useEffect(() => {
+    if (!open) {
+      setGroupId(""); setExamType(REAL_EXAM_TYPES[0].value);
+      setCsvText(""); setParseResult(null); setCsvSaving(false);
+      setManualValues({}); setSavedStudents(new Set()); setManualSaving(null);
+    }
+  }, [open]);
+
+  // ── Manual: save one student ──
+  const saveOneStudent = async (studentId: number) => {
+    const vals = manualValues[studentId] || {};
+    const scores = subjects
+      .filter(s => vals[s.id] !== "" && vals[s.id] != null)
+      .map(s => ({ student_id: studentId, subject_id: s.id, score: parseInt(vals[s.id]) || 0, month: examType }));
+    if (!scores.length) return;
+    setManualSaving(studentId);
+    await saveEntResultsBatch(scores);
+    setManualSaving(null);
+    setSavedStudents(prev => new Set([...prev, studentId]));
+  };
+
+  // ── Manual: save ALL at once ──
+  const saveAllManual = async () => {
+    const scores = students.flatMap(st => {
+      const vals = manualValues[st.id] || {};
+      return subjects
+        .filter(s => vals[s.id] !== "" && vals[s.id] != null)
+        .map(s => ({ student_id: st.id, subject_id: s.id, score: parseInt(vals[s.id]) || 0, month: examType }));
+    });
+    if (!scores.length) return;
+    setManualSaving(-1);
+    await saveEntResultsBatch(scores);
+    setManualSaving(null);
+    setSavedStudents(new Set(students.map(st => st.id)));
+    onSuccess();
+    onOpenChange(false);
+  };
+
+  const manualTotal = (studentId: number) => {
+    const vals = manualValues[studentId] || {};
+    return subjects.reduce((sum, s) => sum + (parseInt(vals[s.id] || "") || 0), 0);
+  };
+
+  const manualFilledCount = students.filter(st =>
+    subjects.some(s => (manualValues[st.id]?.[s.id] || "") !== "")
+  ).length;
+
+  // ── CSV helpers ──
+  const downloadTemplate = () => {
+    const header = ["ФИО", ...subjects.map(s => s.short)].join(",");
+    const rows = students.map(s => [s.full_name, ...subjects.map(() => "")].join(","));
+    const csv = [header, ...rows].join("\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ent_шаблон_${REAL_EXAM_TYPES.find(e => e.value === examType)?.short || examType}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const parseCSV = (text: string): ParsedRow[] => {
+    const lines = text.trim().split(/\r?\n/);
+    if (lines.length < 2) return [];
+    const sep = lines[0].includes(";") ? ";" : lines[0].includes("\t") ? "\t" : ",";
+    const headers = lines[0].split(sep).map(h => h.trim().replace(/^\ufeff/, ""));
+    const subjectColMap: Record<number, number> = {};
+    for (const s of subjects) {
+      const idx = headers.findIndex(h => h.toLowerCase() === s.short.toLowerCase());
+      if (idx >= 0) subjectColMap[s.id] = idx;
+    }
+    return lines.slice(1).filter(l => l.trim()).map(line => {
+      const cells = line.split(sep).map(c => c.trim().replace(/^"|"$/g, ""));
+      const name = cells[0] || "";
+      const matched =
+        students.find(s => s.full_name.trim().toLowerCase() === name.trim().toLowerCase()) ||
+        students.find(s => name.trim().length > 3 && s.full_name.trim().toLowerCase().includes(name.trim().toLowerCase()));
+      const errors: string[] = [];
+      if (!matched) errors.push("Ученик не найден");
+      const scores: Record<number, number | ""> = {};
+      for (const s of subjects) {
+        const colIdx = subjectColMap[s.id];
+        if (colIdx == null) continue;
+        const raw = cells[colIdx] || "";
+        if (raw === "") { scores[s.id] = ""; continue; }
+        const n = Number(raw);
+        if (isNaN(n) || n < 0 || n > s.max) errors.push(`${s.short}: "${raw}" (0–${s.max})`);
+        else scores[s.id] = n;
+      }
+      return { name, studentId: matched?.id ?? null, scores, errors };
+    });
+  };
+
+  const handleCsvChange = (text: string) => {
+    setCsvText(text);
+    setParseResult(text.trim() && students.length > 0 ? parseCSV(text) : null);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => handleCsvChange(ev.target?.result as string ?? "");
+    reader.readAsText(file, "utf-8");
+    e.target.value = "";
+  };
+
+  const validRows = parseResult?.filter(r => r.studentId != null && r.errors.length === 0) ?? [];
+  const errorRows = parseResult?.filter(r => r.errors.length > 0) ?? [];
+
+  const handleCsvSave = async () => {
+    if (!validRows.length) return;
+    setCsvSaving(true);
+    const scores = validRows.flatMap(row =>
+      subjects
+        .filter(s => row.scores[s.id] !== "" && row.scores[s.id] != null)
+        .map(s => ({ student_id: row.studentId!, subject_id: s.id, score: row.scores[s.id] as number, month: examType }))
+    );
+    await saveEntResultsBatch(scores);
+    setCsvSaving(false);
+    onSuccess();
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[92vh] flex flex-col p-0 gap-0">
+        {/* Header */}
+        <div className="px-6 pt-5 pb-4 border-b flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold flex items-center gap-2">
+              <BarChart3 className="h-4.5 w-4.5 text-primary" />
+              Реальный ЕНТ — ввод баллов
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Добавьте баллы вручную или загрузите через CSV</p>
+          </div>
+          <button onClick={() => onOpenChange(false)} className="text-muted-foreground hover:text-foreground transition-colors mt-0.5">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Config row */}
+        <div className="px-6 py-3 border-b bg-muted/30 flex flex-wrap gap-3 items-end">
+          <div className="flex-1 min-w-[140px]">
+            <Label className="text-xs font-medium mb-1 block">Группа</Label>
+            <Select value={groupId} onValueChange={g => { setGroupId(g); setParseResult(null); setCsvText(""); }}>
+              <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Выберите группу" /></SelectTrigger>
+              <SelectContent>
+                {groups.map((g: any) => (
+                  <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex-1 min-w-[160px]">
+            <Label className="text-xs font-medium mb-1 block">Вид ЕНТ</Label>
+            <Select value={examType} onValueChange={v => { setExamType(v); setSavedStudents(new Set()); }}>
+              <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {REAL_EXAM_TYPES.map(e => (
+                  <SelectItem key={e.value} value={e.value}>{e.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {/* Mode switcher */}
+          <div className="flex rounded-lg border overflow-hidden text-xs font-medium">
+            <button
+              onClick={() => setMode("manual")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 transition-colors ${mode === "manual" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+            >
+              <PenLine className="h-3.5 w-3.5" /> Вручную
+            </button>
+            <button
+              onClick={() => setMode("csv")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 transition-colors border-l ${mode === "csv" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+            >
+              <TableIcon className="h-3.5 w-3.5" /> CSV
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+          {!groupId ? (
+            <div className="text-center py-10 text-muted-foreground text-sm">Выберите группу для начала</div>
+          ) : mode === "manual" ? (
+            /* ── MANUAL MODE ── */
+            <div className="space-y-1">
+              {/* Subject header */}
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xs text-muted-foreground">Предметы:</span>
+                {subjects.map(s => (
+                  <Badge key={s.id} variant="outline" className="text-[11px]">{s.short} <span className="text-muted-foreground ml-1">/{s.max}</span></Badge>
+                ))}
+              </div>
+              {/* Header row */}
+              <div className="grid text-xs font-medium text-muted-foreground pb-1 border-b" style={{ gridTemplateColumns: `1fr ${subjects.map(() => "72px").join(" ")} 64px 80px` }}>
+                <div>Ученик</div>
+                {subjects.map(s => <div key={s.id} className="text-center">{s.short}</div>)}
+                <div className="text-center">Итого</div>
+                <div />
+              </div>
+              {/* Student rows */}
+              {students.map(st => {
+                const total = manualTotal(st.id);
+                const isSaved = savedStudents.has(st.id);
+                const isSaving = manualSaving === st.id;
+                const hasSomeValue = subjects.some(s => (manualValues[st.id]?.[s.id] || "") !== "");
+                return (
+                  <div key={st.id}
+                    className={`grid items-center py-1.5 rounded-md px-1 -mx-1 transition-colors ${isSaved ? "bg-green-50 dark:bg-green-950/20" : "hover:bg-muted/30"}`}
+                    style={{ gridTemplateColumns: `1fr ${subjects.map(() => "72px").join(" ")} 64px 80px` }}
+                  >
+                    <div className="text-sm font-medium truncate pr-2 flex items-center gap-1.5">
+                      {isSaved && <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />}
+                      {st.full_name}
+                    </div>
+                    {subjects.map(s => (
+                      <div key={s.id} className="px-1">
+                        <Input
+                          type="number" min={0} max={s.max}
+                          value={manualValues[st.id]?.[s.id] ?? ""}
+                          onChange={e => {
+                            setManualValues(prev => ({
+                              ...prev,
+                              [st.id]: { ...prev[st.id], [s.id]: e.target.value },
+                            }));
+                            setSavedStudents(prev => { const next = new Set(prev); next.delete(st.id); return next; });
+                          }}
+                          className="h-7 text-center text-xs px-1"
+                          placeholder="—"
+                        />
+                      </div>
+                    ))}
+                    <div className={`text-center text-sm font-bold ${total > 0 ? getScoreColor(total, TOTAL_MAX) : "text-muted-foreground/30"}`}>
+                      {total > 0 ? total : "—"}
+                    </div>
+                    <div className="flex justify-end pr-1">
+                      <Button
+                        size="sm"
+                        variant={isSaved ? "outline" : "default"}
+                        className="h-6 text-[11px] px-2"
+                        disabled={!hasSomeValue || isSaving || manualSaving === -1}
+                        onClick={() => saveOneStudent(st.id)}
+                      >
+                        {isSaving ? "..." : isSaved ? "✓ Сохр." : "Сохр."}
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            /* ── CSV MODE ── */
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground bg-muted/50 rounded-lg p-2">
+                <FileText className="h-3.5 w-3.5 shrink-0" />
+                <span>Колонки CSV:</span>
+                {subjects.map(s => (
+                  <Badge key={s.id} variant="outline" className="text-[11px]">{s.short} (0–{s.max})</Badge>
+                ))}
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={downloadTemplate} disabled={students.length === 0}>
+                  <Download className="h-3.5 w-3.5" />
+                  Шаблон CSV ({students.length} уч.)
+                </Button>
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => fileRef.current?.click()}>
+                  <Upload className="h-3.5 w-3.5" />
+                  Загрузить файл
+                </Button>
+                <input ref={fileRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleFileChange} />
+              </div>
+              <div>
+                <Label className="text-xs font-medium mb-1 block">Или вставьте CSV</Label>
+                <textarea
+                  value={csvText}
+                  onChange={e => handleCsvChange(e.target.value)}
+                  placeholder={`ФИО,${subjects.map(s => s.short).join(",")}\nИванов Иван,15,8,7,...`}
+                  className="w-full h-28 rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+              {parseResult && parseResult.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">Предпросмотр ({parseResult.length} строк)</span>
+                    <div className="flex gap-2">
+                      <Badge variant="outline" className="text-green-600 border-green-200">✓ {validRows.length} ок</Badge>
+                      {errorRows.length > 0 && <Badge variant="outline" className="text-red-600 border-red-200">✗ {errorRows.length} ошибок</Badge>}
+                    </div>
+                  </div>
+                  <div className="rounded-md border overflow-auto max-h-52">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-muted/60 border-b sticky top-0">
+                          <th className="px-2 py-1.5 text-left font-medium w-7">#</th>
+                          <th className="px-2 py-1.5 text-left font-medium">ФИО</th>
+                          {subjects.map(s => <th key={s.id} className="px-2 py-1.5 text-center font-medium">{s.short}</th>)}
+                          <th className="px-2 py-1.5 text-left font-medium">Статус</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {parseResult.map((row, i) => (
+                          <tr key={i} className={`border-b last:border-0 ${row.errors.length > 0 ? "bg-red-50 dark:bg-red-950/20" : "hover:bg-muted/20"}`}>
+                            <td className="px-2 py-1 text-muted-foreground">{i + 1}</td>
+                            <td className="px-2 py-1 font-medium max-w-[140px] truncate">{row.name}</td>
+                            {subjects.map(s => (
+                              <td key={s.id} className="px-2 py-1 text-center">
+                                {row.scores[s.id] !== "" && row.scores[s.id] != null
+                                  ? <span className="font-mono">{row.scores[s.id]}</span>
+                                  : <span className="text-muted-foreground/30">—</span>}
+                              </td>
+                            ))}
+                            <td className="px-2 py-1">
+                              {row.errors.length === 0
+                                ? <span className="text-green-600">✓</span>
+                                : <span className="text-red-600 text-[10px]">{row.errors.join("; ")}</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-3 border-t bg-muted/20 flex items-center justify-between gap-2">
+          <div className="text-xs text-muted-foreground">
+            {mode === "manual" && groupId && (
+              <>{manualFilledCount} / {students.length} заполнено · {savedStudents.size} сохранено</>
+            )}
+            {mode === "csv" && parseResult && (
+              <>{validRows.length} из {parseResult.length} строк готовы к сохранению</>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Закрыть</Button>
+            {mode === "manual" ? (
+              <Button
+                size="sm"
+                disabled={manualFilledCount === 0 || manualSaving === -1}
+                onClick={saveAllManual}
+                className="gap-1.5"
+              >
+                {manualSaving === -1 ? "Сохранение..." : `Сохранить всё (${manualFilledCount})`}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                disabled={csvSaving || validRows.length === 0}
+                onClick={handleCsvSave}
+                className="gap-1.5"
+              >
+                {csvSaving ? "Сохранение..." : `Сохранить ${validRows.length} записей`}
+              </Button>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /* ══════ Score Editor Dialog ══════ */
 
 function ScoreEditorDialog({ student, month, profileId, currentScores, onSave, onClose }: {
@@ -177,7 +629,356 @@ function ScoreEditorDialog({ student, month, profileId, currentScores, onSave, o
   );
 }
 
-/* ══════ Main Page ══════ */
+/* ══════ Unified ENT XLSX Import Dialog ══════ */
+
+// Profile subject ids for п1/п2 by profile_id
+const PROFILE_SUB_IDS: Record<number, [number, number]> = {
+  1: [2, 4],  // Мат, Инф
+  2: [2, 5],  // Мат, Физ
+  3: [6, 7],  // Био, Хим
+};
+
+interface XlsxRow {
+  studentId: number | null;
+  rawId: string;
+  тарих?: number | null;
+  чтение?: number | null;
+  матграм?: number | null;
+  п1?: number | null;
+  п2?: number | null;
+  общий?: number | null;
+  errors: string[];
+}
+
+type EntXlsxMode = "trial" | "real";
+
+function EntXlsxImportDialog({ open, onOpenChange, groups, groupProfileMap, studentGroupMap, onSuccess }: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  groups: any[];
+  groupProfileMap: Record<number, number>;
+  studentGroupMap: Record<number, number>;
+  onSuccess: () => void;
+}) {
+  const [entMode, setEntMode] = useState<EntXlsxMode>("trial");
+  const [month, setMonth] = useState(ACADEMIC_MONTHS[ACADEMIC_MONTHS.length - 1].value);
+  const [examType, setExamType] = useState(REAL_EXAM_TYPES[0].value);
+  const [groupId, setGroupId] = useState("all");
+  const [rows, setRows] = useState<XlsxRow[] | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [fileName, setFileName] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const selectedGroup = groups.find((g: any) => String(g.id) === groupId);
+  const profileId: number = selectedGroup?.profile_id || 1;
+  const [p1Id, p2Id] = PROFILE_SUB_IDS[profileId] || [2, 4];
+  const activeMonth = entMode === "trial" ? month : examType;
+
+  useEffect(() => {
+    if (!open) { setRows(null); setFileName(""); setGroupId("all"); }
+  }, [open]);
+
+  const parseXlsx = (file: File) => {
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target!.result as ArrayBuffer);
+        const wb = XLSX.read(data, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+        if (raw.length < 2) { setRows([]); return; }
+
+        let headerIdx = 0;
+        for (let i = 0; i < Math.min(5, raw.length); i++) {
+          const lower = raw[i].map((c: any) => String(c).toLowerCase().trim());
+          if (lower.some(c => c === "id" || c === "id ученика")) { headerIdx = i; break; }
+        }
+        const headers = raw[headerIdx].map((c: any) => String(c).toLowerCase().trim().replace(/\s+/g, ""));
+
+        const idxOf = (keys: string[]) => {
+          for (const k of keys) { const i = headers.indexOf(k); if (i >= 0) return i; }
+          return -1;
+        };
+        const colId     = idxOf(["id", "idученика", "idученика"]);
+        const colTarikh = idxOf(["тарих", "история", "ик", "историяказахстана"]);
+        const colRead   = idxOf(["чтение", "грамотностьчтения", "гч"]);
+        const colMat    = idxOf(["матграм", "матграмотность", "мг", "математическаяграмотность"]);
+        const colP1     = idxOf(["п1", "профиль1", "профиль1"]);
+        const colP2     = idxOf(["п2", "профиль2", "профиль2"]);
+
+        const parsed: XlsxRow[] = [];
+        for (let i = headerIdx + 1; i < raw.length; i++) {
+          const row = raw[i];
+          if (row.every((c: any) => c === "" || c == null)) continue;
+          const rawId = String(row[colId] ?? "").trim();
+          const studentId = rawId && !isNaN(Number(rawId)) ? Number(rawId) : null;
+
+          const parseCell = (col: number, max: number): number | null => {
+            if (col < 0) return null;
+            const v = row[col];
+            if (v === "" || v == null) return null;
+            const n = Number(v);
+            return isNaN(n) || n < 0 || n > max ? null : n;
+          };
+
+          const errs: string[] = [];
+          if (!studentId) errs.push("ID не найден");
+
+          const cells = {
+            тарих:   parseCell(colTarikh,  20),
+            чтение:  parseCell(colRead,    10),
+            матграм: parseCell(colMat,     10),
+            п1:      parseCell(colP1,      50),
+            п2:      parseCell(colP2,      50),
+          };
+
+          if (colTarikh >= 0 && row[colTarikh] !== "" && cells.тарих === null) errs.push("Тарих: неверное значение");
+          if (colRead   >= 0 && row[colRead]   !== "" && cells.чтение === null) errs.push("Чтение: неверное значение");
+          if (colMat    >= 0 && row[colMat]    !== "" && cells.матграм === null) errs.push("МатГрам: неверное значение");
+          if (colP1     >= 0 && row[colP1]     !== "" && cells.п1 === null) errs.push("П1: неверное значение");
+          if (colP2     >= 0 && row[colP2]     !== "" && cells.п2 === null) errs.push("П2: неверное значение");
+
+          const computed = (cells.тарих ?? 0) + (cells.чтение ?? 0) + (cells.матграм ?? 0) + (cells.п1 ?? 0) + (cells.п2 ?? 0);
+          parsed.push({ studentId, rawId, ...cells, общий: computed || null, errors: errs });
+        }
+        setRows(parsed);
+      } catch {
+        setRows([]);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const validRows = rows?.filter(r => r.studentId != null && r.errors.length === 0) ?? [];
+  const errorRows = rows?.filter(r => r.errors.length > 0) ?? [];
+
+  const handleSave = async () => {
+    if (!validRows.length || !activeMonth) return;
+    setSaving(true);
+    const scores: { student_id: number; subject_id: number; score: number; month: string }[] = [];
+    for (const r of validRows) {
+      // Per-student P1/P2 resolution when "all groups" selected
+      let rp1Id = p1Id, rp2Id = p2Id;
+      if (groupId === "all" && r.studentId != null) {
+        const gid = studentGroupMap[r.studentId];
+        if (gid != null) {
+          const pid = groupProfileMap[gid] || 1;
+          [rp1Id, rp2Id] = PROFILE_SUB_IDS[pid] || [2, 4];
+        }
+      }
+      if (r.тарих   != null) scores.push({ student_id: r.studentId!, subject_id: 1,     score: r.тарих,   month: activeMonth });
+      if (r.чтение  != null) scores.push({ student_id: r.studentId!, subject_id: 8,     score: r.чтение,  month: activeMonth });
+      if (r.матграм != null) scores.push({ student_id: r.studentId!, subject_id: 3,     score: r.матграм, month: activeMonth });
+      if (r.п1      != null) scores.push({ student_id: r.studentId!, subject_id: rp1Id, score: r.п1,      month: activeMonth });
+      if (r.п2      != null) scores.push({ student_id: r.studentId!, subject_id: rp2Id, score: r.п2,      month: activeMonth });
+    }
+    await saveEntResultsBatch(scores);
+    setSaving(false);
+    onSuccess();
+    onOpenChange(false);
+  };
+
+  const downloadTemplate = () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["id ученика", "тарих", "чтение", "матграм", "п1", "п2", "общий"],
+      [101, 15, 8, 7, 42, 38, ""],
+      [102, 12, 6, 5, 30, 28, ""],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "ЕНТ Баллы");
+    XLSX.writeFile(wb, `ent_${entMode}_template_${activeMonth}.xlsx`);
+  };
+
+  const monthLabel = entMode === "trial"
+    ? ACADEMIC_MONTHS.find(m => m.value === month)?.label
+    : REAL_EXAM_TYPES.find(m => m.value === examType)?.label;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[92vh] flex flex-col p-0 gap-0">
+        {/* Header */}
+        <div className="px-6 pt-5 pb-4 border-b flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold flex items-center gap-2">
+              <Upload className="h-4 w-4 text-primary" />
+              Загрузка баллов ЕНТ через XLSX
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Колонки: id ученика · тарих · чтение · матграм · п1 · п2 · общий
+            </p>
+          </div>
+          <button onClick={() => onOpenChange(false)} className="text-muted-foreground hover:text-foreground mt-0.5">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Config row */}
+        <div className="px-6 py-3 border-b bg-muted/30 flex flex-wrap gap-3 items-end">
+          {/* Mode toggle */}
+          <div className="flex rounded-lg border overflow-hidden text-xs font-medium self-end">
+            <button
+              onClick={() => { setEntMode("trial"); setRows(null); setFileName(""); }}
+              className={`px-3 py-1.5 transition-colors ${entMode === "trial" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+            >
+              Пробный ЕНТ
+            </button>
+            <button
+              onClick={() => { setEntMode("real"); setRows(null); setFileName(""); }}
+              className={`px-3 py-1.5 transition-colors border-l ${entMode === "real" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+            >
+              Реальный ЕНТ
+            </button>
+          </div>
+
+          {/* Month / exam type selector */}
+          <div className="flex-1 min-w-[160px]">
+            {entMode === "trial" ? (
+              <>
+                <Label className="text-xs font-medium mb-1 block">Месяц</Label>
+                <Select value={month} onValueChange={setMonth}>
+                  <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {ACADEMIC_MONTHS.map(m => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </>
+            ) : (
+              <>
+                <Label className="text-xs font-medium mb-1 block">Вид ЕНТ</Label>
+                <Select value={examType} onValueChange={setExamType}>
+                  <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {REAL_EXAM_TYPES.map(e => (
+                      <SelectItem key={e.value} value={e.value}>{e.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </>
+            )}
+          </div>
+
+          {/* Group selector (for P1/P2 mapping) */}
+          <div className="flex-1 min-w-[160px]">
+            <Label className="text-xs font-medium mb-1 block">Группа (для П1/П2)</Label>
+            <Select value={groupId} onValueChange={setGroupId}>
+              <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Все группы" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Все группы (авто)</SelectItem>
+                {groups.map((g: any) => (
+                  <SelectItem key={g.id} value={String(g.id)}>
+                    <span className="flex items-center gap-1.5">
+                      <GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />
+                      {g.name}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {groupId === "all" ? (
+              <p className="text-[11px] text-muted-foreground mt-1">П1/П2 определяется автоматически по группе ученика</p>
+            ) : groupId ? (
+              <p className="text-[11px] text-muted-foreground mt-1">
+                П1 = {(ENT_PROFILE_SUBJECTS[profileId] || [])[3]?.name}, П2 = {(ENT_PROFILE_SUBJECTS[profileId] || [])[4]?.name}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex gap-2 self-end">
+            <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={downloadTemplate}>
+              <Download className="h-3.5 w-3.5" />Шаблон
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={() => fileRef.current?.click()}>
+              <Upload className="h-3.5 w-3.5" />Загрузить XLSX
+            </Button>
+            <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) parseXlsx(f); e.target.value = ""; }}
+            />
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+          {!rows ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-3">
+              <FileText className="h-10 w-10 opacity-30" />
+              <p className="text-sm">Загрузите XLSX файл для предпросмотра</p>
+              <p className="text-xs">Обязательная колонка: <code className="bg-muted px-1 rounded">id ученика</code></p>
+            </div>
+          ) : rows.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground text-sm">Не удалось прочитать данные из файла</div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">{fileName} — {rows.length} строк</span>
+                <div className="flex gap-2">
+                  <Badge variant="outline" className="text-green-600 border-green-200">✓ {validRows.length} ок</Badge>
+                  {errorRows.length > 0 && <Badge variant="outline" className="text-red-600 border-red-200">✗ {errorRows.length} ошибок</Badge>}
+                </div>
+              </div>
+              <div className="rounded-md border overflow-auto max-h-[45vh]">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-muted/60 border-b sticky top-0">
+                      <th className="px-2 py-1.5 text-left font-medium w-6">#</th>
+                      <th className="px-2 py-1.5 text-center font-medium">ID</th>
+                      <th className="px-2 py-1.5 text-center font-medium">Тарих</th>
+                      <th className="px-2 py-1.5 text-center font-medium">Чтение</th>
+                      <th className="px-2 py-1.5 text-center font-medium">МатГрам</th>
+                      <th className="px-2 py-1.5 text-center font-medium">П1</th>
+                      <th className="px-2 py-1.5 text-center font-medium">П2</th>
+                      <th className="px-2 py-1.5 text-center font-medium">Общий</th>
+                      <th className="px-2 py-1.5 text-left font-medium">Статус</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row, i) => (
+                      <tr key={i} className={`border-b last:border-0 ${row.errors.length > 0 ? "bg-red-50 dark:bg-red-950/20" : "hover:bg-muted/20"}`}>
+                        <td className="px-2 py-1 text-muted-foreground">{i + 1}</td>
+                        <td className="px-2 py-1 text-center font-mono">{row.rawId}</td>
+                        {(["тарих","чтение","матграм","п1","п2"] as const).map(k => (
+                          <td key={k} className="px-2 py-1 text-center">
+                            {row[k] != null ? <span className="font-mono">{row[k]}</span> : <span className="text-muted-foreground/30">—</span>}
+                          </td>
+                        ))}
+                        <td className="px-2 py-1 text-center font-bold">
+                          {row.общий ? <span className={getScoreColor(row.общий, TOTAL_MAX)}>{row.общий}</span> : <span className="text-muted-foreground/30">—</span>}
+                        </td>
+                        <td className="px-2 py-1">
+                          {row.errors.length === 0
+                            ? <span className="text-green-600">✓</span>
+                            : <span className="text-red-600 text-[10px]">{row.errors.join("; ")}</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-3 border-t bg-muted/20 flex items-center justify-between gap-2">
+          <div className="text-xs text-muted-foreground">
+            {rows && <>{validRows.length} из {rows.length} готовы · <strong>{monthLabel}</strong></>}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Закрыть</Button>
+            <Button size="sm" disabled={saving || validRows.length === 0}
+              onClick={handleSave} className="gap-1.5">
+              {saving ? "Сохранение..." : `Сохранить ${validRows.length} записей`}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/*  Main Page  */
 
 export default function EntResultsPage() {
   const { user } = useAuth();
@@ -192,14 +993,16 @@ export default function EntResultsPage() {
   const [loading, setLoading] = useState(true);
   const [chartStudentId, setChartStudentId] = useState("avg");
   const [editStudent, setEditStudent] = useState<{ id: number; full_name: string } | null>(null);
+  const [xlsxImportOpen, setXlsxImportOpen] = useState(false);
 
-  // ── Enhanced filters & sorting ──
+  // тФАтФА Enhanced filters & sorting тФАтФА
   const [sortColumn, setSortColumn] = useState<string>("total");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [scoreRange, setScoreRange] = useState<[number, number]>([0, TOTAL_MAX]);
   const [performanceFilter, setPerformanceFilter] = useState<string>("all"); // all | high | medium | low | critical
   const [showFilters, setShowFilters] = useState(false);
   const [profileFilter, setProfileFilter] = useState<string>("all"); // all | 1 | 2 | 3
+  const [dataMode, setDataMode] = useState<"training" | "real">("training");
 
   useEffect(() => {
     fetchGroups().then(g => { setGroups(g); setSelectedGroupId("all"); });
@@ -227,12 +1030,19 @@ export default function EntResultsPage() {
   const profileId: number = selectedGroup?.profile_id || 1;
   const profileSubjects = ENT_PROFILE_SUBJECTS[profileId] || ENT_PROFILE_SUBJECTS[1];
 
-  // Map group_id → profile_id for looking up per-student profiles
+  // Map group_id тЖТ profile_id for looking up per-student profiles
   const groupProfileMap = useMemo(() => {
     const m: Record<number, number> = {};
     for (const g of groups) m[g.id] = g.profile_id;
     return m;
   }, [groups]);
+
+  // student_id → group_id map for XLSX import P1/P2 resolution
+  const studentGroupMap = useMemo(() => {
+    const m: Record<number, number> = {};
+    for (const r of allData) m[r.student_id] = r.group_id;
+    return m;
+  }, [allData]);
 
   // All available months with data
   const availableMonths = useMemo(() => {
@@ -246,7 +1056,7 @@ export default function EntResultsPage() {
     return idx > 0 ? availableMonths[idx - 1].value : null;
   }, [availableMonths, selectedMonth]);
 
-  // Pivot raw data → student rows for current month
+  // Pivot raw data тЖТ student rows for current month
   const studentsTable = useMemo<StudentRow[]>(() => {
     const map: Record<number, StudentRow> = {};
     for (const r of rawData) {
@@ -339,7 +1149,7 @@ export default function EntResultsPage() {
     };
   }, [filtered, profileSubjects, isAllGroups, groupProfileMap]);
 
-  // ──── All-students progress data ────
+  // тФАтФАтФАтФА All-students progress data тФАтФАтФАтФА
   const allStudentsProgress = useMemo(() => {
     // Per student: first total, last total, all month-totals
     const studentMonths: Record<number, Record<string, number>> = {};
@@ -362,7 +1172,7 @@ export default function EntResultsPage() {
     }).sort((a, b) => b.last - a.last);
   }, [allData, availableMonths]);
 
-  // ──── Total chart data ────
+  // тФАтФАтФАтФА Total chart data тФАтФАтФАтФА
   const chartData = useMemo(() => {
     const studentMonths: Record<string, Record<string, number>> = {};
     const studentNames: Record<number, string> = {};
@@ -380,16 +1190,16 @@ export default function EntResultsPage() {
     if (chartStudentId === "avg") {
       return months.filter(m => avgByMonth[m]).map(m => ({
         month: MONTH_SHORT[m] || m, monthFull: MONTH_LABELS[m] || m,
-        ["Средний балл"]: avgByMonth[m] ? Math.round(avgByMonth[m].sum / avgByMonth[m].count) : 0,
+        ["╨б╤А╨╡╨┤╨╜╨╕╨╣ ╨▒╨░╨╗╨╗"]: avgByMonth[m] ? Math.round(avgByMonth[m].sum / avgByMonth[m].count) : 0,
       }));
     }
     const sid = chartStudentId;
-    const name = studentNames[parseInt(sid)] || "Ученик";
+    const name = studentNames[parseInt(sid)] || "╨г╤З╨╡╨╜╨╕╨║";
     return months.filter(m => (studentMonths[sid]?.[m] || 0) > 0 || avgByMonth[m]).map(m => {
       const pt: Record<string, string | number> = { month: MONTH_SHORT[m] || m, monthFull: MONTH_LABELS[m] || m };
       const st = studentMonths[sid]?.[m] || 0;
       if (st > 0) pt[name] = st;
-      if (avgByMonth[m]) pt["Средний по группе"] = Math.round(avgByMonth[m].sum / avgByMonth[m].count);
+      if (avgByMonth[m]) pt["╨б╤А╨╡╨┤╨╜╨╕╨╣ ╨┐╨╛ ╨│╤А╤Г╨┐╨┐╨╡"] = Math.round(avgByMonth[m].sum / avgByMonth[m].count);
       return pt;
     });
   }, [allData, chartStudentId, availableMonths]);
@@ -431,7 +1241,7 @@ export default function EntResultsPage() {
           point[s.short] = val;
           total += val;
         }
-        point["Итого"] = total;
+        point["╨Ш╤В╨╛╨│╨╛"] = total;
         return point;
       });
     }
@@ -447,7 +1257,7 @@ export default function EntResultsPage() {
         point[s.short] = val;
         total += val;
       }
-      point["Итого"] = total;
+      point["╨Ш╤В╨╛╨│╨╛"] = total;
       return point;
     });
   }, [allData, chartStudentId, availableMonths, profileSubjects, isAllGroups]);
@@ -692,7 +1502,13 @@ export default function EntResultsPage() {
           <SelectContent>
             <SelectItem value="all">Все группы</SelectItem>
             {groups.map((g: any) => (
-              <SelectItem key={g.id} value={String(g.id)}>{g.name} <span className="text-muted-foreground ml-1">({g.profile_name})</span></SelectItem>
+              <SelectItem key={g.id} value={String(g.id)}>
+                <span className="flex items-center gap-1.5">
+                  <GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />
+                  {g.name}
+                  {g.profile_name && <span className="text-muted-foreground ml-1">({g.profile_name})</span>}
+                </span>
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -708,12 +1524,59 @@ export default function EntResultsPage() {
           </Select>
         )}
         <Input placeholder="Поиск по имени..." value={search} onChange={e => setSearch(e.target.value)} className="w-full sm:max-w-[200px]" />
-        <Button variant={showFilters ? "default" : "outline"} size="sm" onClick={() => setShowFilters(f => !f)} className="gap-1.5">
-          <Filter className="h-3.5 w-3.5" />Фильтры
-          {(performanceFilter !== "all" || scoreRange[0] > 0 || scoreRange[1] < TOTAL_MAX || profileFilter !== "all") && (
-            <Badge variant="secondary" className="ml-1 h-5 w-5 p-0 justify-center text-[10px]">!</Badge>
-          )}
-        </Button>
+
+        {/* Training / Real ENT mode toggle + toolbar icons */}
+        <TooltipProvider delayDuration={300}>
+          <div className="flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => setDataMode("training")}
+                  className={`flex items-center justify-center h-8 w-8 rounded-md border transition-colors ${dataMode === "training" ? "bg-primary text-primary-foreground border-primary" : "hover:bg-muted border-border"}`}
+                >
+                  <PenLine className="h-3.5 w-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Тренировочные ЕНТ</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => setDataMode("real")}
+                  className={`flex items-center justify-center h-8 w-8 rounded-md border transition-colors ${dataMode === "real" ? "bg-primary text-primary-foreground border-primary" : "hover:bg-muted border-border"}`}
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Реальный ЕНТ</TooltipContent>
+            </Tooltip>
+
+            {isAdmin && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setXlsxImportOpen(true)}>
+                    <Upload className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Загрузить XLSX</TooltipContent>
+              </Tooltip>
+            )}
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant={showFilters ? "default" : "outline"} size="icon" className="h-8 w-8 relative" onClick={() => setShowFilters(f => !f)}>
+                  <Filter className="h-3.5 w-3.5" />
+                  {(performanceFilter !== "all" || scoreRange[0] > 0 || scoreRange[1] < TOTAL_MAX || profileFilter !== "all") && (
+                    <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-destructive" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Фильтры{(performanceFilter !== "all" || scoreRange[0] > 0 || scoreRange[1] < TOTAL_MAX || profileFilter !== "all") ? " (активны)" : ""}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </TooltipProvider>
         {(performanceFilter !== "all" || scoreRange[0] > 0 || scoreRange[1] < TOTAL_MAX || profileFilter !== "all") && (
           <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => { setPerformanceFilter("all"); setScoreRange([0, TOTAL_MAX]); setProfileFilter("all"); }}>
             Сбросить фильтры
@@ -762,6 +1625,23 @@ export default function EntResultsPage() {
         );
       })()}
 
+      <EntXlsxImportDialog
+        open={xlsxImportOpen}
+        onOpenChange={setXlsxImportOpen}
+        groups={groups}
+        groupProfileMap={groupProfileMap}
+        studentGroupMap={studentGroupMap}
+        onSuccess={async () => {
+          const gid = selectedGroupId === "all" ? undefined : parseInt(selectedGroupId);
+          const [cur, all] = await Promise.all([
+            fetchEntResults(selectedMonth, gid),
+            fetchEntResults(undefined, gid),
+          ]);
+          setRawData(cur);
+          setAllData(all);
+        }}
+      />
+
       <Tabs defaultValue="table">
         <TabsList className="mb-5">
           <TabsTrigger value="table"><Users className="h-4 w-4 mr-1.5" />Таблица баллов</TabsTrigger>
@@ -773,10 +1653,33 @@ export default function EntResultsPage() {
 
         {/* ══════ TABLE TAB ══════ */}
         <TabsContent value="table">
-          <div className="flex flex-wrap gap-1.5 mb-5">
-            {(availableMonths.length > 0 ? availableMonths : ACADEMIC_MONTHS.slice(0, 6)).map(m => (
-              <Button key={m.value} variant={selectedMonth === m.value ? "default" : "outline"} size="sm" onClick={() => setSelectedMonth(m.value)}>{m.short}</Button>
-            ))}
+          {/* Month / exam selector */}
+          <div className="flex flex-wrap gap-1.5 mb-5 items-center">
+            {dataMode === "training" ? (
+              (availableMonths.length > 0 ? availableMonths : ACADEMIC_MONTHS.slice(0, 6)).map(m => (
+                <Button key={m.value} variant={selectedMonth === m.value ? "default" : "outline"} size="sm" onClick={() => setSelectedMonth(m.value)}>{m.short}</Button>
+              ))
+            ) : (
+              REAL_EXAM_TYPES.map(m => {
+                const hasData = availableMonths.some(am => am.value === m.value);
+                return (
+                  <Button
+                    key={m.value}
+                    variant={selectedMonth === m.value ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setSelectedMonth(m.value)}
+                    disabled={!hasData}
+                    className={!hasData ? "opacity-40" : ""}
+                  >
+                    {m.short}
+                    {!hasData && <span className="ml-1 text-[10px] text-muted-foreground">(нет)</span>}
+                  </Button>
+                );
+              })
+            )}
+            {dataMode === "real" && availableMonths.length === 0 && (
+              <span className="text-sm text-muted-foreground italic">Нет данных реального ЕНТ. Загрузите через кнопку «Добавить».</span>
+            )}
           </div>
 
           {averages && (
@@ -955,7 +1858,7 @@ export default function EntResultsPage() {
                       <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                       <XAxis dataKey="label" tick={{ fontSize: 12 }} />
                       <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
-                      <Tooltip contentStyle={{ fontSize: 13, borderRadius: 8 }} formatter={(v: number) => [v, "Учеников"]} />
+                      <RechartsTooltip contentStyle={{ fontSize: 13, borderRadius: 8 }} formatter={(v: number) => [v, "Учеников"]} />
                       {scoreDistribution.map((_, i) => null)}
                       <Bar dataKey="count" name="Учеников" radius={[4, 4, 0, 0]}>
                         {scoreDistribution.map((entry, i) => (
@@ -1158,7 +2061,7 @@ export default function EntResultsPage() {
                       <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                       <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                       <YAxis domain={[0, 100]} tick={{ fontSize: 12 }} unit="%" />
-                      <Tooltip contentStyle={{ fontSize: 13, borderRadius: 8 }}
+                      <RechartsTooltip contentStyle={{ fontSize: 13, borderRadius: 8 }}
                         labelFormatter={label => {
                           const months = availableMonths.map(m => m.value);
                           const idx = months.findIndex(m => MONTH_SHORT[m] === label);
@@ -1195,7 +2098,7 @@ export default function EntResultsPage() {
                             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                             <XAxis dataKey="monthShort" tick={{ fontSize: 11 }} />
                             <YAxis domain={[0, sa.subject.max]} tick={{ fontSize: 11 }} />
-                            <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                            <RechartsTooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}
                               formatter={(v: number) => [v, "Средний балл"]}
                               labelFormatter={label => {
                                 const ms = sa.monthlyStats.find(s => s.monthShort === label);
@@ -1287,7 +2190,7 @@ export default function EntResultsPage() {
                                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                                 <XAxis dataKey="monthShort" tick={{ fontSize: 11 }} />
                                 <YAxis domain={[0, sa.subject.max]} tick={{ fontSize: 11 }} />
-                                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(v: number) => [v, "Средний"]} />
+                                <RechartsTooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(v: number) => [v, "Средний"]} />
                                 <Bar dataKey="avg" name="Средний" radius={[4, 4, 0, 0]} fill={CHART_COLORS[0]}>
                                   <LabelList dataKey="avg" position="top" fontSize={11} fontWeight={600} />
                                 </Bar>
@@ -1496,7 +2399,7 @@ export default function EntResultsPage() {
                         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                         <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                         <YAxis domain={[0, TOTAL_MAX]} tick={{ fontSize: 12 }} />
-                        <Tooltip contentStyle={{ fontSize: 13, borderRadius: 8 }}
+                        <RechartsTooltip contentStyle={{ fontSize: 13, borderRadius: 8 }}
                           labelFormatter={label => { const pt = chartData.find((d: any) => d.month === label) as any; return pt?.monthFull || label; }} />
                         <Legend />
                         {chartLines.map((name, i) => (
@@ -1521,7 +2424,7 @@ export default function EntResultsPage() {
                         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                         <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                         <YAxis domain={[0, 50]} tick={{ fontSize: 12 }} />
-                        <Tooltip contentStyle={{ fontSize: 13, borderRadius: 8 }} />
+                        <RechartsTooltip contentStyle={{ fontSize: 13, borderRadius: 8 }} />
                         <Legend />
                         {profileSubjects.map((s, i) => (
                           <Line key={s.id} type="monotone" dataKey={s.short} name={`${s.name} (/${s.max})`}

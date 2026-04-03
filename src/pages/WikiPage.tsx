@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -220,6 +221,7 @@ function EditorToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
 
 export default function WikiPage() {
   const { user } = useAuth();
+  const { i18n } = useTranslation();
   const { toast } = useToast();
   const isAdmin = user?.role === "admin" || user?.role === "umo_head";
 
@@ -445,9 +447,10 @@ export default function WikiPage() {
   };
 
   const formatDate = (dateStr: string) => {
+    const locale = { ru: "ru-RU", kk: "kk-KZ", en: "en-US" }[i18n.language] ?? "ru-RU";
     try {
       const d = new Date(dateStr);
-      return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" });
+      return d.toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric" });
     } catch { return dateStr; }
   };
 

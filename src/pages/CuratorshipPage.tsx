@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
+import { useTranslation } from "react-i18next";
+import i18n from "@/lib/i18n";
 import {
   Shield, Users, TrendingUp, AlertTriangle, Phone, Calendar,
   ExternalLink, Plus, Trash2, CheckCircle2, RotateCcw, BookOpen, BarChart3, ChevronRight,
-  ClipboardList, Clock, PhoneCall, CircleCheck, Circle, MessageSquare, Edit, GraduationCap,
+  ClipboardList, Clock, PhoneCall, CircleCheck, Circle, MessageSquare, Edit, GraduationCap, MoreHorizontal,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UserAvatar } from "@/components/UserAvatar";
@@ -13,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { formatPhone } from "@/lib/utils";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -108,11 +112,14 @@ function getMonthRange(offset = 0): { from: string; to: string; label: string } 
   const from = `${y}-${String(m + 1).padStart(2, "0")}-01`;
   const last = new Date(y, m + 1, 0).getDate();
   const to = `${y}-${String(m + 1).padStart(2, "0")}-${String(last).padStart(2, "0")}`;
-  const label = d.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
+  const locale = { ru: "ru-RU", kk: "kk-KZ", en: "en-US" }[i18n.language] ?? "ru-RU";
+  const label = d.toLocaleDateString(locale, { month: "long", year: "numeric" });
   return { from, to, label };
 }
 
 function StudentDetailDialog({ student, onClose }: { student: any; onClose: () => void }) {
+  const { i18n } = useTranslation();
+  const locale = { ru: "ru-RU", kk: "kk-KZ", en: "en-US" }[i18n.language] ?? "ru-RU";
   const [details, setDetails] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   // Attendance comments state
@@ -184,59 +191,19 @@ function StudentDetailDialog({ student, onClose }: { student: any; onClose: () =
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-4 flex-wrap">
-            <UserAvatar user={student} size="lg" />
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-lg">{student.full_name}</span>
+          <DialogTitle className="flex items-center gap-3">
+            <UserAvatar user={student} size="md" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-bold text-base">{student.full_name}</span>
                 <Badge variant="outline" className="text-xs">{student.group_name}</Badge>
-              </div>
-              <div className="flex gap-4 text-sm text-muted-foreground pt-1 flex-wrap">
                 {student.last_ent_score != null && (
-                  <span className="flex items-center gap-1">
-                    <BookOpen className="h-3.5 w-3.5" />
-                    Общий балл ЕНТ: <strong className="text-foreground ml-0.5">{student.last_ent_score}</strong>
-                  </span>
-                )}
-                {student.parent_name && (
-                  <span className="flex items-center gap-1"><Users className="h-3.5 w-3.5" />{student.parent_name}</span>
-                )}
-                {student.parent_phone && (
-                  <span className="flex items-center gap-1"><Phone className="h-3.5 w-3.5" />{formatPhone(student.parent_phone)}</span>
+                  <Badge variant="secondary" className="text-xs">ЕНТ: {student.last_ent_score}</Badge>
                 )}
               </div>
-              {/* upload/delete avatar */}
-              <div className="mt-2">
-                <label htmlFor="student-avatar-upload-curator" className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-primary">
-                  <ImagePlus className="h-4 w-4" /> Загрузить фото
-                  <input
-                    id="student-avatar-upload-curator"
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      try {
-                        await uploadStudentAvatar(student.id, file);
-                        window.location.reload();
-                      } catch (err) { alert("Ошибка загрузки фото"); }
-                    }}
-                  />
-                </label>
-                {student.avatar_url && (
-                  <button
-                    className="flex items-center gap-1 text-xs text-destructive hover:underline mt-1"
-                    onClick={async () => {
-                      try {
-                        await deleteStudentAvatar(student.id);
-                        window.location.reload();
-                      } catch (err) { alert("Ошибка удаления фото"); }
-                    }}
-                  >
-                    <Trash2 className="h-3 w-3" /> Удалить фото
-                  </button>
-                )}
+              <div className="flex gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
+                {student.parent_name && <span>{student.parent_name}</span>}
+                {student.parent_phone && <span>{formatPhone(student.parent_phone)}</span>}
               </div>
             </div>
           </DialogTitle>
@@ -250,24 +217,26 @@ function StudentDetailDialog({ student, onClose }: { student: any; onClose: () =
         ) : (
           <Tabs defaultValue="stats" className="mt-2">
             <TabsList className="flex-wrap h-auto gap-1">
-              <TabsTrigger value="stats">
-                <ClipboardList className="h-3.5 w-3.5 mr-1" />Журнал
+              <TabsTrigger value="stats" className="gap-1">
+                <ClipboardList className="h-3.5 w-3.5" /><span className="hidden sm:inline">Журнал</span>
               </TabsTrigger>
-              <TabsTrigger value="ent">
-                <BarChart3 className="h-3.5 w-3.5 mr-1" />ЕНТ
+              <TabsTrigger value="ent" className="gap-1">
+                <BarChart3 className="h-3.5 w-3.5" />ЕНТ
               </TabsTrigger>
-              <TabsTrigger value="absences">
-                Прогулы
+              <TabsTrigger value="absences" className="gap-1">
+                <span>Прогулы</span>
                 {details?.absences?.length > 0 && (
-                  <Badge className="ml-1.5 h-4 text-xs" variant="destructive">{details.absences.length}</Badge>
+                  <Badge className="ml-1 h-4 text-xs" variant="destructive">{details.absences.length}</Badge>
                 )}
               </TabsTrigger>
-              <TabsTrigger value="attendance-comments">
-                <MessageSquare className="h-3.5 w-3.5 mr-1" />Комментарии
+              <TabsTrigger value="attendance-comments" className="gap-1">
+                <MessageSquare className="h-3.5 w-3.5" /><span className="hidden sm:inline">Комментарии</span>
               </TabsTrigger>
-              <TabsTrigger value="notes">Комментарии</TabsTrigger>
-              <TabsTrigger value="teacher-feedback">
-                <GraduationCap className="h-3.5 w-3.5 mr-1" />Отзывы учителей
+              <TabsTrigger value="notes" className="gap-1">
+                <span>Заметки</span>
+              </TabsTrigger>
+              <TabsTrigger value="teacher-feedback" className="gap-1">
+                <GraduationCap className="h-3.5 w-3.5" /><span className="hidden sm:inline">ОТ устазов</span>
               </TabsTrigger>
             </TabsList>
           {/* ====== ATTENDANCE COMMENTS TAB ====== */}
@@ -484,6 +453,33 @@ function StudentDetailDialog({ student, onClose }: { student: any; onClose: () =
             </TabsContent>
 
             <TabsContent value="notes" className="pt-4">
+              {/* Avatar section tucked here to avoid crowding dialog header */}
+              <div className="flex items-center gap-3 mb-4 pb-4 border-b">
+                <UserAvatar user={student} size="lg" />
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="curator-avatar-upload" className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-primary transition-colors">
+                    <ImagePlus className="h-3.5 w-3.5" /> Загрузить фото
+                    <input id="curator-avatar-upload" type="file" accept="image/*" className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        try { await uploadStudentAvatar(student.id, file); window.location.reload(); }
+                        catch { alert("Ошибка загрузки фото"); }
+                      }}
+                    />
+                  </label>
+                  {student.avatar_url && (
+                    <button className="flex items-center gap-1 text-xs text-destructive hover:underline"
+                      onClick={async () => {
+                        try { await deleteStudentAvatar(student.id); window.location.reload(); }
+                        catch { alert("Ошибка удаления фото"); }
+                      }}
+                    >
+                      <Trash2 className="h-3 w-3" /> Удалить фото
+                    </button>
+                  )}
+                </div>
+              </div>
               {details?.notes?.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-10">Заметок по группе нет</p>
               ) : (
@@ -619,6 +615,8 @@ function AddFeedbackForm({ students, curatorId, onAdded }: { students: any[]; cu
 
 export default function CuratorshipPage() {
   const { user } = useAuth();
+  const { i18n } = useTranslation();
+  const locale = { ru: "ru-RU", kk: "kk-KZ", en: "en-US" }[i18n.language] ?? "ru-RU";
   const [groups, setGroups] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
   const [metrics, setMetrics] = useState<any>(null);
@@ -648,6 +646,9 @@ export default function CuratorshipPage() {
   // Admin call summary state
   const [adminCallSummary, setAdminCallSummary] = useState<any>(null);
   const [adminCallMonth, setAdminCallMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [expandedCuratorId, setExpandedCuratorId] = useState<number | null>(null);
+  const [curatorCallDetails, setCuratorCallDetails] = useState<Record<number, any>>({}); // curator_id -> tasks data
+  const [curatorCallDetailsLoading, setCuratorCallDetailsLoading] = useState<number | null>(null);
 
   // Teacher feedback state (for non-curator teachers)
   const [teacherFbData, setTeacherFbData] = useState<any>(null);
@@ -760,6 +761,8 @@ export default function CuratorshipPage() {
   // Admin: load call summary
   useEffect(() => {
     if (!isAdmin) return;
+    setExpandedCuratorId(null);
+    setCuratorCallDetails({});
     fetchCallTasksSummary(adminCallMonth).then(setAdminCallSummary);
     fetchTeacherFeedbackSummary(adminCallMonth).then(setAdminTeacherFbSummary);
   }, [isAdmin, adminCallMonth]);
@@ -864,6 +867,8 @@ export default function CuratorshipPage() {
                   {adminCallSummary.summary.map((c: any) => {
                     const pct = c.total_tasks > 0 ? Math.round(c.completed_tasks / c.total_tasks * 100) : 0;
                     const isDone = pct === 100;
+                    const isExpanded = expandedCuratorId === c.curator_id;
+                    const details = curatorCallDetails[c.curator_id];
                     return (
                       <Card key={c.curator_id} className={isDone ? "border-green-300 bg-green-50/30 dark:border-green-800 dark:bg-green-900/10" : ""}>
                         <CardContent className="pt-4 pb-4">
@@ -874,10 +879,30 @@ export default function CuratorshipPage() {
                                 <p className="text-xs text-muted-foreground">{c.group_names}</p>
                               )}
                             </div>
-                            <div className="text-right">
+                            <div className="flex items-center gap-2">
                               <Badge variant={isDone ? "default" : "outline"} className={isDone ? "bg-green-600" : ""}>
                                 {c.completed_tasks}/{c.total_tasks}
                               </Badge>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={async () => {
+                                  if (isExpanded) {
+                                    setExpandedCuratorId(null);
+                                    return;
+                                  }
+                                  setExpandedCuratorId(c.curator_id);
+                                  if (!details) {
+                                    setCuratorCallDetailsLoading(c.curator_id);
+                                    const data = await fetchCallTasks(c.curator_id, adminCallMonth);
+                                    setCuratorCallDetails(prev => ({ ...prev, [c.curator_id]: data }));
+                                    setCuratorCallDetailsLoading(null);
+                                  }
+                                }}
+                              >
+                                {isExpanded ? "Свернуть" : "Подробнее"}
+                              </Button>
                             </div>
                           </div>
                           <Progress value={pct} className="h-2" />
@@ -893,6 +918,48 @@ export default function CuratorshipPage() {
                               </span>
                             )}
                           </div>
+                          {isExpanded && (
+                            <div className="mt-3 border-t pt-3">
+                              {curatorCallDetailsLoading === c.curator_id ? (
+                                <div className="text-xs text-muted-foreground py-2 text-center">Загрузка...</div>
+                              ) : details?.tasks?.length ? (
+                                <div className="space-y-1.5">
+                                  {details.tasks.map((task: any) => (
+                                    <div
+                                      key={task.id}
+                                      className={`flex items-start gap-2 p-2 rounded-md text-xs ${task.status === "completed" ? "bg-green-50 dark:bg-green-900/20" : "bg-muted/40"}`}
+                                    >
+                                      <div className="mt-0.5 shrink-0">
+                                        {task.status === "completed"
+                                          ? <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+                                          : <Circle className="h-3.5 w-3.5 text-muted-foreground" />}
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <p className="font-medium">{task.full_name}</p>
+                                        {task.parent_name && <p className="text-muted-foreground">{task.parent_name}</p>}
+                                        {task.parent_phone && (
+                                          <p className="text-muted-foreground">{task.parent_phone}</p>
+                                        )}
+                                        {task.status === "completed" && task.call_result && (
+                                          <p className="text-green-700 dark:text-green-400 mt-0.5">
+                                            Итог: {task.call_result}
+                                          </p>
+                                        )}
+                                        {task.status === "completed" && task.notes && (
+                                          <p className="text-muted-foreground mt-0.5 line-clamp-2">{task.notes}</p>
+                                        )}
+                                      </div>
+                                      {task.group_name && (
+                                        <Badge variant="outline" className="text-[10px] shrink-0">{task.group_name}</Badge>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-muted-foreground text-center py-2">Нет данных</p>
+                              )}
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
                     );
@@ -1007,7 +1074,7 @@ export default function CuratorshipPage() {
                   <div className="flex items-center justify-between mb-2">
                     <div>
                       <p className="text-sm font-semibold">
-                        Отзывы по ученикам за {new Date(teacherFbData.month + "-01").toLocaleDateString("ru-RU", { month: "long", year: "numeric" })}
+                        Отзывы по ученикам за {new Date(teacherFbData.month + "-01").toLocaleDateString(locale, { month: "long", year: "numeric" })}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         Напишите отзыв по каждому ученику — кураторы передадут родителям
@@ -1125,12 +1192,6 @@ export default function CuratorshipPage() {
             <TabsTrigger value="students">
               <Users className="h-4 w-4 mr-1.5" />Мои ученики
               <Badge className="ml-1.5 h-4 min-w-4 text-xs px-1">{students.length}</Badge>
-            </TabsTrigger>
-            <TabsTrigger value="feedback">
-              <Phone className="h-4 w-4 mr-1.5" />Связь с родителями
-              {parentFeedback.length > 0 && (
-                <Badge className="ml-1.5 h-4 min-w-4 text-xs px-1">{parentFeedback.length}</Badge>
-              )}
             </TabsTrigger>
             <TabsTrigger value="calls">
               <PhoneCall className="h-4 w-4 mr-1.5" />Обзвон
@@ -1270,95 +1331,26 @@ export default function CuratorshipPage() {
                         <TableCell className="text-sm">{s.parent_phone ? formatPhone(s.parent_phone) : <span className="text-muted-foreground text-xs">—</span>}</TableCell>
                         <TableCell onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center gap-0.5">
-                            {waLink && (
-                              <a href={waLink} target="_blank" rel="noopener noreferrer">
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-green-600 hover:text-green-700 hover:bg-green-50">
-                                  <ExternalLink className="h-3.5 w-3.5" />
-                                </Button>
-                              </a>
-                            )}
                             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setSelectedStudent(s)}>
                               <ChevronRight className="h-3.5 w-3.5" />
                             </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          </TabsContent>
-
-          {/* ====== PARENT FEEDBACK TAB ====== */}
-          <TabsContent value="feedback">
-            <AddFeedbackForm students={students} curatorId={curatorId} onAdded={loadData} />
-
-            <div className="rounded-md border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Дата</TableHead>
-                    <TableHead>Ученик / Группа</TableHead>
-                    <TableHead>Итоги звонка</TableHead>
-                    <TableHead>Статус</TableHead>
-                    <TableHead>WhatsApp</TableHead>
-                    <TableHead className="w-10"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {parentFeedback.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground py-10">
-                        Нет записей. Добавьте первый звонок выше.
-                      </TableCell>
-                    </TableRow>
-                  ) : parentFeedback.map((fb: any) => {
-                    const waLink = getWhatsAppLink(fb.parent_phone, fb.student_name, fb.group_name || "");
-                    return (
-                      <TableRow key={fb.id}>
-                        <TableCell className="text-sm font-mono whitespace-nowrap">{fb.date}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <UserAvatar user={fb} size="xs" />
-                            <p className="font-medium text-sm">{fb.student_name}</p>
-                          </div>
-                          {fb.group_name && <Badge variant="outline" className="text-xs mt-0.5">{fb.group_name}</Badge>}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground max-w-xs">{fb.notes || "—"}</TableCell>
-                        <TableCell>
-                          <button onClick={() => handleToggleStatus(fb)}>
-                            {fb.status === "resolved" ? (
-                              <Badge className="bg-green-500/15 text-green-700 hover:bg-green-500/25 cursor-pointer border-0 gap-1">
-                                <CheckCircle2 className="h-3 w-3" />Решено
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline" className="text-orange-600 border-orange-300 hover:bg-orange-50 cursor-pointer gap-1">
-                                <RotateCcw className="h-3 w-3" />Перезвонить
-                              </Badge>
+                            {waLink && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="h-7 w-7">
+                                    <MoreHorizontal className="h-3.5 w-3.5" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem asChild>
+                                    <a href={waLink} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2">
+                                      <ExternalLink className="h-3.5 w-3.5 text-green-600" /> WhatsApp родителю
+                                    </a>
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             )}
-                          </button>
-                        </TableCell>
-                        <TableCell>
-                          {waLink ? (
-                            <a href={waLink} target="_blank" rel="noopener noreferrer">
-                              <Button variant="outline" size="sm" className="h-7 text-xs text-green-700 border-green-300 hover:bg-green-50 gap-1">
-                                <ExternalLink className="h-3 w-3" />WhatsApp
-                              </Button>
-                            </a>
-                          ) : (
-                            <span className="text-muted-foreground text-xs">нет номера</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-destructive/60 hover:text-destructive"
-                            onClick={() => handleDeleteFeedback(fb.id)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
@@ -1384,7 +1376,7 @@ export default function CuratorshipPage() {
                   <CardContent className="pt-4 pb-4">
                     <div className="flex items-center justify-between mb-2">
                       <div>
-                        <p className="text-sm font-semibold">Обзвон родителей за {new Date(callTasksData.month + "-01").toLocaleDateString("ru-RU", { month: "long", year: "numeric" })}</p>
+                        <p className="text-sm font-semibold">Обзвон родителей за {new Date(callTasksData.month + "-01").toLocaleDateString(locale, { month: "long", year: "numeric" })}</p>
                         <p className="text-xs text-muted-foreground">Необходимо обзвонить всех родителей каждый месяц</p>
                       </div>
                       <Badge
@@ -1444,10 +1436,15 @@ export default function CuratorshipPage() {
                             <TableCell className="text-sm">{t.parent_phone ? formatPhone(t.parent_phone) : <span className="text-muted-foreground text-xs">—</span>}</TableCell>
                             <TableCell>
                               {t.call_result ? (
-                                <Badge variant={
-                                  t.call_result === "Все хорошо" ? "default" :
-                                  t.call_result === "Не ответил" ? "secondary" : "outline"
-                                } className={`text-xs ${t.call_result === "Все хорошо" ? "bg-green-600" : t.call_result === "Есть проблемы" ? "border-orange-400 text-orange-600" : ""}`}>
+                                <Badge
+                                  variant="outline"
+                                  className={`text-xs ${
+                                    t.call_result === "Все хорошо" ? "bg-green-100 text-green-700 border-green-300 dark:bg-green-900/30 dark:text-green-400" :
+                                    t.call_result === "Перезвонить" ? "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400" :
+                                    t.call_result === "Не ответил" ? "bg-muted text-muted-foreground" :
+                                    t.call_result === "Есть проблемы" ? "bg-red-100 text-red-700 border-red-300 dark:bg-red-900/30 dark:text-red-400" : ""
+                                  }`}
+                                >
                                   {t.call_result}
                                 </Badge>
                               ) : null}
@@ -1508,7 +1505,7 @@ export default function CuratorshipPage() {
                   <SelectTrigger className="w-40"><SelectValue placeholder="Группа" /></SelectTrigger>
                   <SelectContent>
                     {groups.map((g: any) => (
-                      <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
+                      <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -1553,8 +1550,8 @@ export default function CuratorshipPage() {
                       <TableRow>
                         <TableHead className="sticky left-0 bg-background z-10 min-w-[180px]">Ученик</TableHead>
                         {gridData.dates.map((d: string) => {
-                          const day = new Date(d + "T00:00:00").toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
-                          const weekday = new Date(d + "T00:00:00").toLocaleDateString("ru-RU", { weekday: "short" });
+                          const day = new Date(d + "T00:00:00").toLocaleDateString(locale, { day: "numeric", month: "short" });
+                          const weekday = new Date(d + "T00:00:00").toLocaleDateString(locale, { weekday: "short" });
                           return (
                             <TableHead key={d} className="text-center min-w-[48px] px-1">
                               <div className="text-xs leading-tight">
@@ -1624,7 +1621,7 @@ export default function CuratorshipPage() {
                       <div className="flex items-center justify-between mb-2">
                         <div>
                           <p className="text-sm font-semibold">
-                            Отзывы по ученикам за {new Date(teacherFbData.month + "-01").toLocaleDateString("ru-RU", { month: "long", year: "numeric" })}
+                            Отзывы по ученикам за {new Date(teacherFbData.month + "-01").toLocaleDateString(locale, { month: "long", year: "numeric" })}
                           </p>
                           <p className="text-xs text-muted-foreground">Напишите отзыв по каждому ученику — кураторы передадут родителям</p>
                         </div>
@@ -1727,10 +1724,9 @@ export default function CuratorshipPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="Все хорошо">Все хорошо</SelectItem>
-                    <SelectItem value="Есть проблемы">Есть проблемы</SelectItem>
-                    <SelectItem value="Не ответил">Не ответил</SelectItem>
                     <SelectItem value="Перезвонить">Перезвонить</SelectItem>
-                    <SelectItem value="Номер недоступен">Номер недоступен</SelectItem>
+                    <SelectItem value="Не ответил">Не ответил</SelectItem>
+                    <SelectItem value="Есть проблемы">Есть проблемы</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

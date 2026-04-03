@@ -90,6 +90,12 @@ export async function updateStudent(id: number, data: Record<string, unknown>) {
   return res.json();
 }
 
+export async function archiveStudent(id: number) {
+  const res = await fetch(`${API_BASE}/students/${id}/archive`, { ...defaultOptions, method: "PATCH" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function fetchGroups() {
   try {
     const res = await fetch(`${API_BASE}/groups`, defaultOptions);
@@ -196,6 +202,22 @@ export async function fetchMarkedLessons(params: { from: string; to: string; tea
   }
 }
 
+export async function fetchScheduleFillStatus(from: string, to: string) {
+  try {
+    const search = new URLSearchParams({ from, to });
+    const res = await fetch(`${API_BASE}/admin/schedule-fill-status?${search.toString()}`, defaultOptions);
+    if (!res.ok) throw new Error("Failed to fetch schedule fill status");
+    return await res.json() as Array<{
+      schedule_id: number; teacher_id: number; teacher_name: string;
+      group_name: string; subject_name: string; time_label: string;
+      start_time: string; cycle: string; date: string; has_attendance: boolean;
+    }>;
+  } catch (error) {
+    console.error("Error fetching schedule fill status:", error);
+    return [];
+  }
+}
+
 export async function fetchAttendanceByScheduleDate(params: { scheduleId: number; date: string }) {
   try {
     const search = new URLSearchParams();
@@ -264,6 +286,18 @@ export async function deleteAdhocLesson(id: number) {
 }
 
 // ====================== STUDENTS ======================
+
+export async function createQuiz(data: {
+  schedule_id: number | null;
+  date: string;
+  title: string;
+  results: { student_id: number; score: number | null }[];
+  created_by: number;
+}) {
+  const res = await fetch(`${API_BASE}/quizzes`, { ...defaultOptions, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+  if (!res.ok) throw new Error("Failed to create quiz");
+  return await res.json();
+}
 
 export async function fetchStudents() {
   try {
@@ -471,6 +505,17 @@ export async function fetchTimeSlots() {
     console.error("Error fetching time slots:", error);
     return [];
   }
+}
+
+export async function createOrGetTimeSlot(start_time: string, end_time: string, label?: string) {
+  const res = await fetch(`${API_BASE}/time-slots`, {
+    ...defaultOptions,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ start_time, end_time, label }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<{ id: number; start_time: string; end_time: string; label: string }>;
 }
 
 // ====================== ATTENDANCE ======================
@@ -722,6 +767,18 @@ export async function fetchAttendanceGrid(groupId: number, from: string, to: str
     if (!res.ok) throw new Error("Failed");
     return await res.json();
   } catch { return { dates: [], students: [] }; }
+}
+
+export async function fetchAttendanceReconciliation(from: string, to: string, groupId?: number) {
+  try {
+    const q = new URLSearchParams({ from, to });
+    if (groupId) q.set("group_id", String(groupId));
+    const res = await fetch(`${API_BASE}/admin/attendance-reconciliation?${q.toString()}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+    });
+    if (!res.ok) throw new Error("Failed");
+    return await res.json();
+  } catch { return { dates: [], students: [], groups: [] }; }
 }
 
 // ====================== PARENT FEEDBACK ======================

@@ -1,13 +1,15 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { loadLessons, saveLessons } from "@/lib/storage";
 import { Lesson } from "@/data/mockSchedule";
-import { fetchLessons, fetchTasks, fetchTimeSlots, updateTask, fetchNotes, createNote as createNoteAPI, deleteNoteById, fetchAdhocLessons, createAdhocLesson, deleteAdhocLesson, updateAdhocLessonAttendance, fetchStudents, fetchUsers, fetchSubjects, fetchMarkedLessons } from "@/lib/api";
+import { fetchLessons, fetchTasks, fetchTimeSlots, updateTask, fetchNotes, createNote as createNoteAPI, deleteNoteById, fetchAdhocLessons, createAdhocLesson, deleteAdhocLesson, updateAdhocLessonAttendance, fetchStudents, fetchUsers, fetchSubjects, fetchMarkedLessons, fetchScheduleFillStatus, fetchAttendanceReconciliation } from "@/lib/api";
 import { ClassManagementModal } from "@/components/ClassManagementModal";
 import ScheduleConstructor from "@/components/ScheduleConstructor";
+import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { useAuth } from "@/contexts/AuthContext";
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, X, Settings2, PanelRightClose, PanelRightOpen, CheckCircle2, Circle, ListTodo, Download, Users as UsersIcon } from "lucide-react";
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, X, Settings2, PanelRightClose, PanelRightOpen, CheckCircle2, Circle, ListTodo, Download, Users as UsersIcon, ClipboardCheck } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -18,7 +20,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { playSuccess } from "@/lib/sounds";
 import { toast } from "sonner";
 import { format, addDays, startOfWeek, addWeeks, subWeeks, subDays } from "date-fns";
+import { ru as dateFnsRu, kk as dateFnsKk, enUS as dateFnsEn } from "date-fns/locale";
 import { useTranslation } from "react-i18next";
+import * as XLSX from "xlsx";
 
 const GROUP_COLORS = [
   "border-l-blue-500", "border-l-emerald-500", "border-l-violet-500",
@@ -28,7 +32,7 @@ const GROUP_COLORS = [
 ];
 const getGroupColor = (groupId: number) => GROUP_COLORS[(groupId - 1) % GROUP_COLORS.length];
 
-type ViewMode = "day" | "week" | "month" | "report";
+type ViewMode = "day" | "week" | "month" | "report" | "reconciliation";
 
 interface CalendarNote {
   id: number;
@@ -40,7 +44,8 @@ interface CalendarNote {
 
 export default function CalendarPage() {
   const { user } = useAuth();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const dateFnsLocale = i18n.language === "kk" ? dateFnsKk : i18n.language === "en" ? dateFnsEn : dateFnsRu;
   const [selectedLesson, setSelectedLesson] = useState<Lesson | null>(null);
   const [selectedLessonDate, setSelectedLessonDate] = useState<string>(() => format(new Date(), "yyyy-MM-dd"));
   const [modalOpen, setModalOpen] = useState(false);
@@ -79,6 +84,18 @@ export default function CalendarPage() {
   const [reportDateFrom, setReportDateFrom] = useState(() => format(subDays(new Date(), 7), "yyyy-MM-dd"));
   const [reportDateTo, setReportDateTo] = useState(() => format(new Date(), "yyyy-MM-dd"));
   const [reportTeacherFilter, setReportTeacherFilter] = useState<string>("all");
+  const [fillStatusData, setFillStatusData] = useState<any[]>([]);
+  const [fillStatusLoading, setFillStatusLoading] = useState(false);
+
+  // Reconciliation state
+  const [reconFrom, setReconFrom] = useState(() => {
+    const d = new Date(); d.setMonth(d.getMonth() - 1); d.setDate(1);
+    return format(d, "yyyy-MM-dd");
+  });
+  const [reconTo, setReconTo] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [reconGroupFilter, setReconGroupFilter] = useState<string>("all");
+  const [reconData, setReconData] = useState<any>({ dates: [], students: [], groups: [] });
+  const [reconLoading, setReconLoading] = useState(false);
 
   // Ad-hoc lessons
   const [adhocLessons, setAdhocLessons] = useState<any[]>([]);
@@ -86,7 +103,7 @@ export default function CalendarPage() {
   const [allStudents, setAllStudents] = useState<any[]>([]);
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allSubjects, setAllSubjects] = useState<any[]>([]);
-  const [adhocForm, setAdhocForm] = useState({ title: "", teacher_id: "", subject_id: "", room: "", time_slot: "", description: "" });
+  const [adhocForm, setAdhocForm] = useState({ title: "", teacher_id: "", subject_id: "", room: "", time_slot: "", end_time: "", description: "" });
   const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
   const [adhocGroupFilter, setAdhocGroupFilter] = useState<string>("all");
   const [adhocAttendanceModal, setAdhocAttendanceModal] = useState<any>(null);
@@ -172,7 +189,7 @@ export default function CalendarPage() {
       setAllUsers(users.filter((u: any) => u.role === "teacher" || u.role === "admin"));
       setAllSubjects(subjects);
     }
-    setAdhocForm({ title: "", teacher_id: user?.id || "", subject_id: "", room: "", time_slot: "", description: "" });
+    setAdhocForm({ title: "", teacher_id: user?.id || "", subject_id: "", room: "", time_slot: "", end_time: "", description: "" });
     setSelectedStudentIds([]);
     setAdhocGroupFilter("all");
     setAdhocModalOpen(true);
@@ -230,6 +247,37 @@ export default function CalendarPage() {
     return groups;
   }, [lessons]);
   
+  const adhocConflicts = useMemo(() => {
+    if (!adhocForm.time_slot || !adhocForm.end_time || selectedStudentIds.length === 0) return [];
+    const startA = adhocForm.time_slot;
+    const endA = adhocForm.end_time;
+    if (startA >= endA) return [];
+    const selectedStudents = allStudents.filter((s: any) => selectedStudentIds.includes(s.id));
+    const groupIds = [...new Set(selectedStudents.map((s: any) => s.group_id).filter(Boolean))] as number[];
+    const conflicts: { group_name: string; subject: string; time: string }[] = [];
+    for (const groupId of groupIds) {
+      const groupLessons = lessons.filter((l: any) => l.group_id === groupId);
+      for (const lesson of groupLessons) {
+        const startB = lesson.time_slot;
+        const slot = allTimeSlots.find(ts => ts.start_time === startB);
+        const endB = slot?.end_time || startB;
+        if (startA < endB && startB < endA) {
+          const groupName = selectedStudents.find((s: any) => s.group_id === groupId)?.group_name || `Группа ${groupId}`;
+          if (!conflicts.some(c => c.group_name === groupName && c.time === `${startB}–${endB}`)) {
+            conflicts.push({ group_name: groupName, subject: lesson.subject || "—", time: `${startB}–${endB}` });
+          }
+        }
+      }
+    }
+    return conflicts;
+  }, [adhocForm.time_slot, adhocForm.end_time, selectedStudentIds, allStudents, lessons, allTimeSlots]);
+
+  // Time slots that have at least one lesson today (for admin grid views)
+  const activeTimeSlotsToday = useMemo(() => {
+    const starts = new Set(lessons.map((l: any) => l.time_slot));
+    return allTimeSlots.filter(slot => starts.has(slot.start_time));
+  }, [lessons, allTimeSlots]);
+
   const getLessonForCell = (timeSlot: string, room: string) => {
     return lessons.find((l) => l.time_slot === timeSlot && l.room === room);
   };
@@ -316,7 +364,7 @@ export default function CalendarPage() {
 
   // Load which lessons are already "marked" (attendance saved) for visible date range
   useEffect(() => {
-    if (viewMode === "report") return;
+    if (viewMode === "report" || viewMode === "reconciliation") return;
     const from = viewMode === "day"
       ? format(currentDate, "yyyy-MM-dd")
       : viewMode === "week"
@@ -339,6 +387,27 @@ export default function CalendarPage() {
       setMarkedLessonMap(next);
     })();
   }, [viewMode, currentDate, weekDays, monthDays, user?.id, user?.role]);
+
+  // Load schedule fill status for report view
+  useEffect(() => {
+    if (viewMode !== "report" || user?.role !== "admin") return;
+    if (!reportDateFrom || !reportDateTo) return;
+    setFillStatusLoading(true);
+    fetchScheduleFillStatus(reportDateFrom, reportDateTo)
+      .then(setFillStatusData)
+      .finally(() => setFillStatusLoading(false));
+  }, [viewMode, reportDateFrom, reportDateTo, user?.role]);
+
+  // Load reconciliation data
+  useEffect(() => {
+    if (viewMode !== "reconciliation" || user?.role !== "admin") return;
+    if (!reconFrom || !reconTo) return;
+    setReconLoading(true);
+    const gid = reconGroupFilter !== "all" ? parseInt(reconGroupFilter) : undefined;
+    fetchAttendanceReconciliation(reconFrom, reconTo, gid)
+      .then(setReconData)
+      .finally(() => setReconLoading(false));
+  }, [viewMode, reconFrom, reconTo, reconGroupFilter, user?.role]);
 
   const getNotesForDate = (date: string) => notes.filter((n) => n.date === date);
 
@@ -378,10 +447,10 @@ export default function CalendarPage() {
   };
 
   const dateLabel = useMemo(() => {
-    if (viewMode === "day") return format(currentDate, "EEEE, MMMM d, yyyy");
-    if (viewMode === "week") return `${format(weekDays[0], "MMM d")} — ${format(weekDays[6], "MMM d, yyyy")}`;
-    return format(currentDate, "MMMM yyyy");
-  }, [viewMode, currentDate, weekDays]);
+    if (viewMode === "day") return format(currentDate, "EEEE, MMMM d, yyyy", { locale: dateFnsLocale });
+    if (viewMode === "week") return `${format(weekDays[0], "MMM d", { locale: dateFnsLocale })} — ${format(weekDays[6], "MMM d, yyyy", { locale: dateFnsLocale })}`;
+    return format(currentDate, "MMMM yyyy", { locale: dateFnsLocale });
+  }, [viewMode, currentDate, weekDays, dateFnsLocale]);
 
   const exportSchedulePDF = () => {
     const cols = scheduleViewMode === "teachers" ? allTeachers : allGroups;
@@ -529,44 +598,65 @@ export default function CalendarPage() {
               <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">{t("Click any class to manage attendance")}</p>
             </div>
           </div>
-          <div className="flex items-center gap-1.5 md:gap-2 flex-wrap">
+          <div className="flex items-center gap-1 ml-auto">
             <Button variant="outline" size="sm" className="h-7 md:h-8 text-xs" onClick={goToToday}>{t("Today")}</Button>
             <Button variant="outline" size="sm" className="h-7 md:h-8 text-xs" onClick={goToTomorrow}>{t("Tomorrow")}</Button>
-            {user?.role === "admin" && (
-              <Button variant={showConstructor ? "default" : "outline"} size="sm" className="h-7 md:h-8 text-xs" onClick={() => setShowConstructor(!showConstructor)}>
-                <Settings2 className="h-4 w-4 md:mr-1" /> <span className="hidden md:inline">{t("Schedule Constructor")}</span>
-              </Button>
-            )}
-            {user?.role === "admin" && viewMode === "day" && !showConstructor && (
-              <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
-                <button
-                  onClick={() => setScheduleViewMode("teachers")}
-                  className={`px-2 py-1 text-[11px] md:text-xs rounded-md font-medium transition-all ${
-                    scheduleViewMode === "teachers" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >{t("По учителям")}</button>
-                <button
-                  onClick={() => setScheduleViewMode("groups")}
-                  className={`px-2 py-1 text-[11px] md:text-xs rounded-md font-medium transition-all ${
-                    scheduleViewMode === "groups" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >{t("По группам")}</button>
-              </div>
-            )}
-            <Button variant="outline" size="sm" className="h-7 md:h-8 text-xs" onClick={exportSchedulePDF}>
-              <Download className="h-4 w-4 md:mr-1" /> <span className="hidden md:inline">Скачать PDF</span>
-            </Button>
-            <Button size="sm" className="h-7 md:h-8 text-xs" onClick={() => openAddNote()}>
-              <Plus className="h-4 w-4 md:mr-1" /> <span className="hidden sm:inline">{t("Add Note")}</span>
-            </Button>
-            <Button variant="outline" size="sm" className="h-7 md:h-8 text-xs" onClick={openAdhocModal}>
-              <UsersIcon className="h-4 w-4 md:mr-1" /> <span className="hidden md:inline">Сборный урок</span>
-            </Button>
-            {user?.role === "admin" && (
-              <Button variant={viewMode === "report" ? "default" : "outline"} size="sm" className="h-7 md:h-8 text-xs" onClick={() => setViewMode("report")}>
-                <ListTodo className="h-4 w-4 md:mr-1" /> <span className="hidden md:inline">Отчет учителей</span>
-              </Button>
-            )}
+            <div className="w-px h-5 bg-border mx-1" />
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={() => openAddNote()}>
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("Add Note")}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={openAdhocModal}>
+                    <UsersIcon className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Сборный урок</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={exportSchedulePDF}>
+                    <Download className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Скачать PDF</TooltipContent>
+              </Tooltip>
+              {user?.role === "admin" && (
+                <>
+                  <div className="w-px h-5 bg-border mx-1" />
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant={showConstructor ? "default" : "outline"} size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={() => setShowConstructor(!showConstructor)}>
+                        <Settings2 className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{t("Schedule Constructor")}</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant={viewMode === "report" ? "default" : "outline"} size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={() => setViewMode("report")}>
+                        <ListTodo className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Отчет учителей</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant={viewMode === "reconciliation" ? "default" : "outline"} size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={() => setViewMode("reconciliation")}>
+                        <ClipboardCheck className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Сверка</TooltipContent>
+                  </Tooltip>
+                </>
+              )}
+            </TooltipProvider>
           </div>
         </div>
       </div>
@@ -581,18 +671,36 @@ export default function CalendarPage() {
 
       {/* View controls + navigation */}
       <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
-          {(["day", "week", "month"] as ViewMode[]).map((mode) => (
-            <button
-              key={mode}
-              onClick={() => setViewMode(mode)}
-              className={`px-3 py-1.5 text-sm rounded-md font-medium transition-all capitalize ${
-                viewMode === mode ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t(mode)}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
+            {(["day", "week", "month"] as ViewMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                className={`px-3 py-1.5 text-sm rounded-md font-medium transition-all capitalize ${
+                  viewMode === mode ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {t(mode)}
+              </button>
+            ))}
+          </div>
+          {user?.role === "admin" && viewMode === "day" && !showConstructor && (
+            <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
+              <button
+                onClick={() => setScheduleViewMode("teachers")}
+                className={`px-2 py-1 text-[11px] md:text-xs rounded-md font-medium transition-all ${
+                  scheduleViewMode === "teachers" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >{t("По учителям")}</button>
+              <button
+                onClick={() => setScheduleViewMode("groups")}
+                className={`px-2 py-1 text-[11px] md:text-xs rounded-md font-medium transition-all ${
+                  scheduleViewMode === "groups" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >{t("По группам")}</button>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="icon" onClick={() => navigateDate(-1)}>
@@ -663,7 +771,7 @@ export default function CalendarPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {allTimeSlots.map((slot) => (
+                  {activeTimeSlotsToday.map((slot) => (
                     <tr key={slot.id}>
                       <td className="sticky left-0 z-10 bg-card p-3 text-sm font-medium text-foreground border-b border-r border-border whitespace-nowrap">
                         <span>{slot.start_time}</span>
@@ -704,13 +812,16 @@ export default function CalendarPage() {
                     </th>
                     {allGroups.map((group) => (
                       <th key={group.id} className="bg-muted p-3 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider border-b border-r border-border min-w-[160px]">
-                        {group.name}
+                        <div className="flex items-center justify-center gap-1.5">
+                          <GroupPersonAvatar groupName={group.name} size={22} />
+                          {group.name}
+                        </div>
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {allTimeSlots.map((slot) => (
+                  {activeTimeSlotsToday.map((slot) => (
                     <tr key={slot.id}>
                       <td className="sticky left-0 z-10 bg-card p-3 text-sm font-medium text-foreground border-b border-r border-border whitespace-nowrap">
                         <span>{slot.start_time}</span>
@@ -937,9 +1048,11 @@ export default function CalendarPage() {
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Все учителя</SelectItem>
-                      {allTeachers.map(t => (
-                        <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
-                      ))}
+                      {Array.from(new Map(fillStatusData.map(r => [r.teacher_id, r.teacher_name])).entries())
+                        .sort((a, b) => a[1].localeCompare(b[1]))
+                        .map(([id, name]) => (
+                          <SelectItem key={id} value={String(id)}>{name}</SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -950,70 +1063,198 @@ export default function CalendarPage() {
           {/* Report table */}
           <Card className="border-0 shadow-sm overflow-hidden">
             <CardContent className="p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/50">
-                      <th className="px-4 py-3 text-left font-semibold">Учитель</th>
-                      <th className="px-4 py-3 text-left font-semibold">Дата</th>
-                      <th className="px-4 py-3 text-left font-semibold">Уроки</th>
-                      <th className="px-4 py-3 text-left font-semibold">Статус</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allLessons
-                      .filter((lesson) => {
-                        const lessonDate = lesson.dates?.[0];
-                        if (!lessonDate) return false;
-                        const fromOk = lessonDate >= reportDateFrom;
-                        const toOk = lessonDate <= reportDateTo;
-                        const teacherOk = reportTeacherFilter === "all" || lesson.teacher_id === parseInt(reportTeacherFilter);
-                        return fromOk && toOk && teacherOk;
-                      })
-                      .reduce((acc: any[], lesson) => {
-                        const date = lesson.dates?.[0];
-                        const key = `${lesson.teacher_id}-${date}`;
-                        const existing = acc.find(r => r.key === key);
-                        if (!existing) {
-                          acc.push({
-                            key,
-                            teacher_id: lesson.teacher_id,
-                            teacher_name: lesson.teacher_name,
-                            date: date,
-                            lessons: [lesson],
-                          });
-                        } else {
-                          existing.lessons.push(lesson);
-                        }
-                        return acc;
-                      }, [])
-                      .map((row: any, idx) => (
-                        <tr key={row.key} className={`border-b ${idx % 2 ? "bg-muted/20" : ""}`}>
-                          <td className="px-4 py-3 font-medium">{row.teacher_name}</td>
-                          <td className="px-4 py-3">{format(new Date(row.date), "dd.MM.yyyy")}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex flex-wrap gap-1">
-                              {row.lessons.map((l: any) => (
-                                <Badge key={l.id} variant="outline" className="text-xs">
-                                  {l.time_slot} - {l.group_name}
+              {fillStatusLoading ? (
+                <div className="p-6 text-center text-muted-foreground text-sm">Загрузка...</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="px-4 py-3 text-left font-semibold">Учитель</th>
+                        <th className="px-4 py-3 text-left font-semibold">Дата</th>
+                        <th className="px-4 py-3 text-left font-semibold">Группа / Предмет</th>
+                        <th className="px-4 py-3 text-left font-semibold">Время</th>
+                        <th className="px-4 py-3 text-left font-semibold">Статус</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fillStatusData
+                        .filter((row) =>
+                          (reportTeacherFilter === "all" || row.teacher_id === parseInt(reportTeacherFilter))
+                        )
+                        .sort((a, b) => a.date.localeCompare(b.date) || a.teacher_name.localeCompare(b.teacher_name))
+                        .map((row, idx) => (
+                          <tr key={`${row.schedule_id}-${row.date}`} className={`border-b ${idx % 2 ? "bg-muted/20" : ""}`}>
+                            <td className="px-4 py-3 font-medium">{row.teacher_name}</td>
+                            <td className="px-4 py-3">{format(new Date(row.date + "T00:00:00"), "dd.MM.yyyy")}</td>
+                            <td className="px-4 py-3">
+                              <span className="font-medium">{row.group_name}</span>
+                              {row.subject_name && <span className="text-muted-foreground"> / {row.subject_name}</span>}
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground text-xs">{row.time_label || row.start_time}</td>
+                            <td className="px-4 py-3">
+                              {row.has_attendance ? (
+                                <Badge className="bg-green-100 text-green-700 hover:bg-green-100 dark:bg-green-900/40 dark:text-green-300">
+                                  Заполнено
                                 </Badge>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="px-4 py-3">
-                            <Badge className="bg-green-100 text-green-700 hover:bg-green-100 dark:bg-green-900/40 dark:text-green-300">
-                              Заполнено
-                            </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-orange-600 border-orange-300">
+                                  Не заполнено
+                                </Badge>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      {fillStatusData.filter(row => reportTeacherFilter === "all" || row.teacher_id === parseInt(reportTeacherFilter)).length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">
+                            Нет данных за выбранный период
                           </td>
                         </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </div>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
       )}
+
+      {/* Reconciliation View */}
+      {viewMode === "reconciliation" && user?.role === "admin" && (() => {
+        const reconDates: string[] = reconData.dates || [];
+        const reconStudents: any[] = reconData.students || [];
+        const reconGroups: any[] = reconData.groups || [];
+
+        const fmtDay = (d: string) => {
+          const dt = new Date(d + "T00:00:00");
+          return `${dt.getDate()}.${String(dt.getMonth() + 1).padStart(2, "0")}`;
+        };
+
+        const statusCell = (val: string | null) => {
+          if (val === "present") return <span className="inline-block w-5 h-5 rounded bg-emerald-500 text-white text-[10px] font-bold leading-5 text-center" title="Был">✓</span>;
+          if (val === "late") return <span className="inline-block w-5 h-5 rounded bg-amber-400 text-white text-[10px] font-bold leading-5 text-center" title="Опоздал">О</span>;
+          if (val === "absent") return <span className="inline-block w-5 h-5 rounded bg-red-500 text-white text-[10px] font-bold leading-5 text-center" title="Не был">✗</span>;
+          return <span className="inline-block w-5 h-5 rounded bg-muted text-muted-foreground text-[10px] leading-5 text-center" title="Нет урока">—</span>;
+        };
+
+        const exportReconExcel = () => {
+          const headers = ["ID", "Ученик", "Группа", "Куратор", ...reconDates.map(fmtDay), "Был", "Не был", "Опоздал", "Нет данных", "Всего дней"];
+          const rows = reconStudents.map((s: any) => {
+            const dateCells = reconDates.map(d => {
+              const v = s.attendance?.[d];
+              if (v === "present") return "✓";
+              if (v === "late") return "О";
+              if (v === "absent") return "✗";
+              return "—";
+            });
+            return [
+              s.id, s.full_name, s.group_name ?? "", s.curator_name ?? "",
+              ...dateCells,
+              s.summary?.present ?? 0, s.summary?.absent ?? 0,
+              s.summary?.late ?? 0, s.summary?.noData ?? 0, s.summary?.total ?? 0,
+            ];
+          });
+          const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+          // Auto-width for first columns
+          ws["!cols"] = [{ wch: 8 }, { wch: 28 }, { wch: 16 }, { wch: 20 }, ...reconDates.map(() => ({ wch: 6 })), { wch: 6 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 10 }];
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, "Сверка");
+          XLSX.writeFile(wb, `Сверка ${reconFrom} — ${reconTo}.xlsx`);
+        };
+
+        return (
+          <div className="space-y-4">
+            {/* Filters */}
+            <Card className="border-0 shadow-sm">
+              <CardContent className="pt-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                  <div className="space-y-2">
+                    <Label>От даты</Label>
+                    <Input type="date" value={reconFrom} onChange={(e) => setReconFrom(e.target.value)} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>До даты</Label>
+                    <Input type="date" value={reconTo} onChange={(e) => setReconTo(e.target.value)} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Группа</Label>
+                    <Select value={reconGroupFilter} onValueChange={setReconGroupFilter}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Все группы</SelectItem>
+                        {reconGroups.map((g: any) => (
+                          <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button size="sm" className="h-9 gap-1.5" onClick={exportReconExcel} disabled={reconStudents.length === 0}>
+                    <Download className="h-4 w-4" /> Экспорт в Excel
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Table */}
+            <Card className="border-0 shadow-sm overflow-hidden">
+              <CardContent className="p-0">
+                {reconLoading ? (
+                  <div className="p-8 text-center text-muted-foreground text-sm">Загрузка...</div>
+                ) : reconStudents.length === 0 ? (
+                  <div className="p-8 text-center text-muted-foreground text-sm">Нет данных за выбранный период</div>
+                ) : (
+                  <div className="overflow-x-auto max-h-[70vh]">
+                    <table className="w-full text-xs border-collapse">
+                      <thead className="sticky top-0 z-10 bg-card">
+                        <tr className="border-b bg-muted/60">
+                          <th className="text-left px-3 py-2.5 font-semibold text-muted-foreground sticky left-0 bg-muted/60 z-20 min-w-[180px]">Ученик</th>
+                          <th className="text-left px-2 py-2.5 font-semibold text-muted-foreground min-w-[100px]">Группа</th>
+                          {reconDates.map(d => (
+                            <th key={d} className="text-center px-0.5 py-2.5 font-semibold text-muted-foreground min-w-[28px]" title={d}>
+                              {fmtDay(d)}
+                            </th>
+                          ))}
+                          <th className="text-center px-2 py-2.5 font-semibold text-emerald-600 min-w-[36px]" title="Был">✓</th>
+                          <th className="text-center px-2 py-2.5 font-semibold text-red-600 min-w-[36px]" title="Не был">✗</th>
+                          <th className="text-center px-2 py-2.5 font-semibold text-amber-600 min-w-[36px]" title="Опоздал">О</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reconStudents.map((s: any, idx: number) => (
+                          <tr key={s.id} className={`border-b border-border/30 hover:bg-muted/20 transition-colors ${idx % 2 ? "bg-muted/10" : ""}`}>
+                            <td className="px-3 py-2 font-medium sticky left-0 bg-card z-10 truncate max-w-[200px]" title={s.full_name}>
+                              <a href={`/students/${s.id}`} className="hover:underline text-primary">{s.full_name}</a>
+                            </td>
+                            <td className="px-2 py-2 text-muted-foreground truncate">{s.group_name ?? ""}</td>
+                            {reconDates.map(d => (
+                              <td key={d} className="text-center px-0.5 py-2">
+                                {statusCell(s.attendance?.[d])}
+                              </td>
+                            ))}
+                            <td className="text-center px-2 py-2 font-bold text-emerald-600 tabular-nums">{s.summary?.present ?? 0}</td>
+                            <td className="text-center px-2 py-2 font-bold text-red-600 tabular-nums">{s.summary?.absent ?? 0}</td>
+                            <td className="text-center px-2 py-2 font-bold text-amber-600 tabular-nums">{s.summary?.late ?? 0}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Legend */}
+            <div className="flex items-center gap-4 text-xs text-muted-foreground px-1">
+              <span className="flex items-center gap-1.5">{statusCell("present")} Присутствовал</span>
+              <span className="flex items-center gap-1.5">{statusCell("absent")} Отсутствовал</span>
+              <span className="flex items-center gap-1.5">{statusCell("late")} Опоздал</span>
+              <span className="flex items-center gap-1.5">{statusCell(null)} Нет урока</span>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Add Note Modal */}
       <Dialog open={noteModalOpen} onOpenChange={setNoteModalOpen}>
@@ -1083,10 +1324,6 @@ export default function CalendarPage() {
                 <Input value={adhocForm.title} onChange={e => setAdhocForm({...adhocForm, title: e.target.value})} placeholder="Общий урок по математике" />
               </div>
               <div className="space-y-1.5">
-                <Label>Время</Label>
-                <Input type="time" value={adhocForm.time_slot} onChange={e => setAdhocForm({...adhocForm, time_slot: e.target.value})} />
-              </div>
-              <div className="space-y-1.5">
                 <Label>Учитель</Label>
                 <Select value={adhocForm.teacher_id} onValueChange={v => setAdhocForm({...adhocForm, teacher_id: v})}>
                   <SelectTrigger><SelectValue placeholder="Выберите" /></SelectTrigger>
@@ -1095,6 +1332,39 @@ export default function CalendarPage() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+
+            {/* Time row with inline validation */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Начало</Label>
+                <Input type="time" value={adhocForm.time_slot} onChange={e => setAdhocForm({...adhocForm, time_slot: e.target.value})} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Конец</Label>
+                <Input
+                  type="time"
+                  value={adhocForm.end_time}
+                  onChange={e => setAdhocForm({...adhocForm, end_time: e.target.value})}
+                  className={adhocForm.time_slot && adhocForm.end_time && adhocForm.end_time <= adhocForm.time_slot ? "border-destructive" : ""}
+                />
+              </div>
+              {adhocForm.time_slot && adhocForm.end_time && adhocForm.end_time <= adhocForm.time_slot && (
+                <div className="col-span-2 rounded-lg bg-destructive/10 border border-destructive/30 px-3 py-2">
+                  <p className="text-xs text-destructive font-medium">⚠ Время окончания должно быть позже начала</p>
+                </div>
+              )}
+              {adhocConflicts.length > 0 && (
+                <div className="col-span-2 rounded-lg bg-destructive/10 border border-destructive/30 p-3 space-y-1">
+                  <p className="text-sm font-semibold text-destructive flex items-center gap-1.5">⚠ Конфликт расписания — у группы уже есть урок в это время</p>
+                  {adhocConflicts.map((c, i) => (
+                    <p key={i} className="text-xs text-destructive/80">{c.group_name}: {c.subject} в {c.time}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Предмет (опционально)</Label>
                 <Select value={adhocForm.subject_id} onValueChange={v => setAdhocForm({...adhocForm, subject_id: v})}>
@@ -1123,7 +1393,12 @@ export default function CalendarPage() {
                   <SelectContent>
                     <SelectItem value="all">Все группы</SelectItem>
                     {[...new Set(allStudents.filter(s => s.group_name).map(s => s.group_name))].sort().map(gn =>
-                      <SelectItem key={gn} value={gn}>{gn}</SelectItem>
+                      <SelectItem key={gn} value={gn}>
+                        <span className="flex items-center gap-1.5">
+                          <GroupPersonAvatar groupName={gn} size={18} showTooltip={false} />
+                          {gn}
+                        </span>
+                      </SelectItem>
                     )}
                   </SelectContent>
                 </Select>
@@ -1145,7 +1420,7 @@ export default function CalendarPage() {
                   ))}
               </div>
             </div>
-            <Button onClick={handleCreateAdhoc} className="w-full" disabled={!adhocForm.title || !adhocForm.time_slot || selectedStudentIds.length === 0}>
+            <Button onClick={handleCreateAdhoc} className="w-full" disabled={!adhocForm.title || !adhocForm.time_slot || selectedStudentIds.length === 0 || adhocConflicts.length > 0 || (!!adhocForm.time_slot && !!adhocForm.end_time && adhocForm.end_time <= adhocForm.time_slot)}>
               Создать сборный урок
             </Button>
           </div>

@@ -1,13 +1,16 @@
-import { Users, Filter, TrendingUp, Calendar, BookOpen, Search, Phone, GraduationCap, UserCheck, ArrowUpDown, Download, MessageSquare, Pencil, Save, X, ImagePlus, Trash2 } from "lucide-react";
+import { Users, Filter, TrendingUp, Calendar, BookOpen, Search, Phone, GraduationCap, UserCheck, ArrowUpDown, Download, MessageSquare, Pencil, Save, X, ImagePlus, Trash2, MoreHorizontal } from "lucide-react";
+import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useState, useEffect, useMemo, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { fetchStudents, fetchGroups, fetchStudent, updateStudent, fetchTeacherFeedbackByStudent, fetchParentFeedback, fetchLessonCommentsByStudent, uploadStudentAvatar, deleteStudentAvatar } from "@/lib/api";
 import { UserAvatar } from "@/components/UserAvatar";
 import { useAuth } from "@/contexts/AuthContext";
@@ -40,6 +43,7 @@ interface EntResult {
 }
 
 interface StudentDetails extends Student {
+  avatar_url?: string | null;
   attendance_stats?: {
     total_lessons: number;
     present_count: number;
@@ -64,6 +68,7 @@ type CommentFilter = "all" | "month";
 
 export default function StudentsPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [selectedGroup, setSelectedGroup] = useState<string>("all");
   const [students, setStudents] = useState<Student[]>([]);
@@ -414,9 +419,6 @@ export default function StudentsPage() {
           <Skeleton className="h-10 w-10 rounded-xl" />
           <div><Skeleton className="h-6 w-40" /><Skeleton className="h-4 w-56 mt-1" /></div>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-20 rounded-xl" />)}
-        </div>
         <Skeleton className="h-10 w-full rounded-lg" />
         {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-14 rounded-lg" />)}
       </div>
@@ -434,62 +436,6 @@ export default function StudentsPage() {
           <h1 className="text-lg md:text-2xl font-heading font-bold text-foreground">Ученики</h1>
           <p className="text-xs md:text-sm text-muted-foreground">{stats.total} учеников в {groups.length} группах</p>
         </div>
-      </div>
-
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                <Users className="h-5 w-5 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{stats.total}</p>
-                <p className="text-xs text-muted-foreground">Всего учеников</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-green-500/10 flex items-center justify-center">
-                <UserCheck className="h-5 w-5 text-green-600" />
-              </div>
-              <div>
-                <p className={`text-2xl font-bold ${rateColor(stats.avgAttendance)}`}>{stats.avgAttendance}%</p>
-                <p className="text-xs text-muted-foreground">Ср. посещаемость</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-violet-500/10 flex items-center justify-center">
-                <GraduationCap className="h-5 w-5 text-violet-600" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{stats.avgEnt || "—"}</p>
-                <p className="text-xs text-muted-foreground">Ср. балл ЕНТ</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center">
-                <BookOpen className="h-5 w-5 text-amber-600" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{groups.length}</p>
-                <p className="text-xs text-muted-foreground">Групп</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       {/* Group pills */}
@@ -533,7 +479,7 @@ export default function StudentsPage() {
           <SelectContent>
             <SelectItem value="all">Все группы</SelectItem>
             {groups.map((group) => (
-              <SelectItem key={group.id} value={group.id.toString()}>{group.name}</SelectItem>
+              <SelectItem key={group.id} value={group.id.toString()}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={group.name} size={18} showTooltip={false} />{group.name}</span></SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -574,7 +520,7 @@ export default function StudentsPage() {
               {filteredStudents.map((student) => (
                 <tr
                   key={student.id}
-                  onClick={() => handleStudentClick(student)}
+                  onClick={() => navigate(`/students/${student.id}`)}
                   className="border-b hover:bg-muted/30 cursor-pointer transition-colors"
                 >
                   <td className="p-3">
@@ -636,29 +582,45 @@ export default function StudentsPage() {
       <Dialog open={modalOpen} onOpenChange={(open) => { setModalOpen(open); if (!open) setEditMode(false); }}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Users className="h-5 w-5" />
-              <span className="flex-1">{selectedStudent?.full_name}</span>
-              {selectedStudent && !editMode && canEditStudent(selectedStudent) && (
-                <Button variant="outline" size="sm" className="gap-1.5" onClick={startEditing}>
-                  <Pencil className="h-3.5 w-3.5" /> Редактировать
-                </Button>
-              )}
-              {selectedStudent && editMode && (
-                <>
-                  <Button variant="default" size="sm" className="gap-1.5" onClick={handleSaveStudent} disabled={saving}>
-                    <Save className="h-3.5 w-3.5" /> {saving ? "..." : "Сохранить"}
+            <DialogTitle className="flex items-center gap-2 pr-8">
+              <Users className="h-5 w-5 shrink-0" />
+              <span className="flex-1 truncate">{selectedStudent?.full_name}</span>
+
+              {/* Action toolbar — right side */}
+              <div className="flex items-center gap-1.5 ml-auto shrink-0">
+                {/* Edit / Save / Cancel — primary */}
+                {selectedStudent && !editMode && canEditStudent(selectedStudent) && (
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={startEditing}>
+                    <Pencil className="h-3.5 w-3.5" /> Редактировать
                   </Button>
-                  <Button variant="outline" size="sm" className="gap-1.5" onClick={cancelEditing} disabled={saving}>
-                    <X className="h-3.5 w-3.5" /> Отмена
-                  </Button>
-                </>
-              )}
-              {selectedStudent && !editMode && (
-                <Button variant="outline" size="sm" className="gap-1.5" onClick={exportStudentPDF}>
-                  <Download className="h-3.5 w-3.5" /> PDF
-                </Button>
-              )}
+                )}
+                {editMode && (
+                  <>
+                    <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={handleSaveStudent} disabled={saving}>
+                      <Save className="h-3.5 w-3.5" /> {saving ? "…" : "Сохранить"}
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={cancelEditing} disabled={saving}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </>
+                )}
+
+                {/* Secondary actions dropdown */}
+                {selectedStudent && !editMode && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-44">
+                      <DropdownMenuItem onClick={exportStudentPDF}>
+                        <Download className="h-3.5 w-3.5 mr-2" /> Скачать PDF
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
             </DialogTitle>
           </DialogHeader>
           {studentDetailsLoading ? (

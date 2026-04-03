@@ -8,6 +8,7 @@ import { AppLayout } from "@/components/AppLayout";
 import Login from "@/pages/Login";
 import CalendarPage from "@/pages/CalendarPage";
 import StudentsPage from "@/pages/StudentsPage";
+import Student360Page from "@/pages/Student360Page";
 import EntResultsPage from "@/pages/EntResultsPage";
 import CuratorshipPage from "@/pages/CuratorshipPage";
 import TeamPage from "@/pages/TeamPage";
@@ -49,6 +50,7 @@ const App = () => (
             <Route path="/login" element={<AuthRoute><Login /></AuthRoute>} />
             <Route path="/" element={<ProtectedRoute><CalendarPage /></ProtectedRoute>} />
             <Route path="/students" element={<ProtectedRoute><StudentsPage /></ProtectedRoute>} />
+            <Route path="/students/:id" element={<ProtectedRoute><Student360Page /></ProtectedRoute>} />
             <Route path="/ent-results" element={<ProtectedRoute allowedRoles={["admin", "umo_head", "teacher"]}><EntResultsPage /></ProtectedRoute>} />
             <Route path="/curatorship" element={<ProtectedRoute><CuratorshipPage /></ProtectedRoute>} />
             <Route path="/team" element={<ProtectedRoute allowedRoles={["admin", "umo_head"]}><TeamPage /></ProtectedRoute>} />

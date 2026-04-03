@@ -20,6 +20,7 @@ import {
   Pencil, Search, Download, Upload, Printer, Columns3, X,
   Type, Hash, CalendarDays, CheckSquare, Copy, ClipboardCopy, ArrowUpFromLine, ArrowDownFromLine,
   CopyPlus, Palette, GraduationCap, User, UsersRound,
+  Eye, ChevronUp, ChevronDown, ChevronsUpDown, SigmaSquare,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -317,7 +318,7 @@ function ContextMenu({ state, rows, columns, onClose, onDeleteRow, onClearCell, 
 
 /* ====================== SPREADSHEET TABLE ====================== */
 
-function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDeleteRow, onClearCell, onCopyCell, onCopyRow, onDuplicateRow, onInsertRow, rowColors, onSetRowColor }: {
+function SpreadsheetTable({ columns: allColumns, rows, canEdit, onCellChange, onAddRow, onDeleteRow, onClearCell, onCopyCell, onCopyRow, onDuplicateRow, onInsertRow, rowColors, onSetRowColor }: {
   columns: DynamicColumn[]; rows: DynamicRow[]; canEdit: boolean;
   onCellChange: (rowId: number, key: string, value: string | number | boolean) => void;
   onAddRow: () => void; onDeleteRow: (rowId: number) => void; onClearCell: (rowId: number, colKey: string) => void;
@@ -336,24 +337,81 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
   const [selAnchor, setSelAnchor] = useState<{ r: number; c: number } | null>(null);
   const [selEnd, setSelEnd] = useState<{ r: number; c: number } | null>(null);
 
+  // ---- @mention state ----
+  const [mentionState, setMentionState] = useState<{ query: string; position: { x: number; y: number }; cursorPos: number } | null>(null);
+
+  // ---- NEW: sort, visibility, resize, search ----
+  const [sortConfig, setSortConfig] = useState<{ key: string; dir: "asc" | "desc" } | null>(null);
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set());
+  const [showColPanel, setShowColPanel] = useState(false);
+  const [colWidths, setColWidths] = useState<Record<string, number>>({});
+  const resizeRef = useRef<{ key: string; startX: number; startW: number } | null>(null);
+  const [tableSearch, setTableSearch] = useState("");
+
+  // ---- Derived: visible columns ----
+  const columns = useMemo(() => allColumns.filter(c => !hiddenCols.has(c.key)), [allColumns, hiddenCols]);
+
+  // ---- Derived: processed rows (filter + sort) ----
+  const processedRows = useMemo(() => {
+    let arr = [...rows];
+    if (tableSearch.trim()) {
+      const q = tableSearch.trim().toLowerCase();
+      arr = arr.filter(r => allColumns.some(col => String(r.row_data[col.key] ?? "").toLowerCase().includes(q)));
+    }
+    if (sortConfig) {
+      arr.sort((a, b) => {
+        const va = a.row_data[sortConfig.key] ?? "";
+        const vb = b.row_data[sortConfig.key] ?? "";
+        const na = Number(va); const nb = Number(vb);
+        const isNum = !isNaN(na) && !isNaN(nb) && va !== "" && vb !== "";
+        const cmp = isNum ? na - nb : String(va).localeCompare(String(vb), "ru");
+        return sortConfig.dir === "asc" ? cmp : -cmp;
+      });
+    }
+    return arr;
+  }, [rows, allColumns, tableSearch, sortConfig]);
+
+  // ---- Derived: stats for number columns ----
+  const numStats = useMemo(() => {
+    return columns.filter(c => c.type === "number").map(col => {
+      const vals = processedRows.map(r => r.row_data[col.key]).filter(v => v !== "" && v != null).map(v => Number(v)).filter(v => !isNaN(v));
+      const sum = vals.reduce((a, b) => a + b, 0);
+      return { key: col.key, sum, avg: vals.length ? +(sum / vals.length).toFixed(1) : 0, count: vals.length };
+    });
+  }, [columns, processedRows]);
+
+  // ---- Derived: selection range ----
   const selRange = useMemo(() => {
     if (!selAnchor) return null;
     const end = selEnd || selAnchor;
-    return {
-      r1: Math.min(selAnchor.r, end.r), r2: Math.max(selAnchor.r, end.r),
-      c1: Math.min(selAnchor.c, end.c), c2: Math.max(selAnchor.c, end.c),
-    };
+    return { r1: Math.min(selAnchor.r, end.r), r2: Math.max(selAnchor.r, end.r), c1: Math.min(selAnchor.c, end.c), c2: Math.max(selAnchor.c, end.c) };
   }, [selAnchor, selEnd]);
 
-  const isSelected = (ri: number, ci: number) => {
-    if (!selRange) return false;
-    return ri >= selRange.r1 && ri <= selRange.r2 && ci >= selRange.c1 && ci <= selRange.c2;
-  };
-
+  const isSelected = (ri: number, ci: number) => selRange ? ri >= selRange.r1 && ri <= selRange.r2 && ci >= selRange.c1 && ci <= selRange.c2 : false;
   const isMultiSelect = selRange && (selRange.r1 !== selRange.r2 || selRange.c1 !== selRange.c2);
 
-  // ---- @mention state ----
-  const [mentionState, setMentionState] = useState<{ query: string; position: { x: number; y: number }; cursorPos: number } | null>(null);
+  // ---- Resize handler ----
+  const startResize = useCallback((e: React.MouseEvent, key: string) => {
+    e.preventDefault(); e.stopPropagation();
+    const startW = colWidths[key] || 150;
+    resizeRef.current = { key, startX: e.clientX, startW };
+    const onMove = (me: MouseEvent) => {
+      if (!resizeRef.current) return;
+      setColWidths(prev => ({ ...prev, [resizeRef.current!.key]: Math.max(60, resizeRef.current!.startW + me.clientX - resizeRef.current!.startX) }));
+    };
+    const onUp = () => { resizeRef.current = null; document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [colWidths]);
+
+  // ---- Sort handler ----
+  const handleSort = (colKey: string) => {
+    setSortConfig(prev => {
+      if (!prev || prev.key !== colKey) return { key: colKey, dir: "asc" };
+      if (prev.dir === "asc") return { key: colKey, dir: "desc" };
+      return null;
+    });
+  };
 
   const startEditing = (rowId: number, col: DynamicColumn, val: string | number | boolean) => {
     if (!canEdit || col.type === "checkbox") return;
@@ -375,7 +433,7 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
   const cancelEdit = () => { setEditingCell(null); setEditValue(""); setMentionState(null); };
 
   const moveFocus = (ri: number, ci: number) => {
-    ri = Math.max(0, Math.min(ri, rows.length - 1));
+    ri = Math.max(0, Math.min(ri, processedRows.length - 1));
     ci = Math.max(0, Math.min(ci, columns.length - 1));
     cellRefs.current.get(cellKey(ri, ci))?.focus();
   };
@@ -385,12 +443,10 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
     const val = e.target.value;
     setEditValue(val);
     const cursorPos = e.target.selectionStart ?? val.length;
-    // Find @ before cursor
     const textBefore = val.slice(0, cursorPos);
     const atIdx = textBefore.lastIndexOf("@");
     if (atIdx !== -1) {
       const query = textBefore.slice(atIdx + 1);
-      // Only show if no space before @ or it's at the start
       if (atIdx === 0 || /\s/.test(textBefore[atIdx - 1])) {
         const inputEl = inputRef.current;
         if (inputEl) {
@@ -422,7 +478,7 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
     if (!selRange) return;
     const lines: string[] = [];
     for (let r = selRange.r1; r <= selRange.r2; r++) {
-      const row = rows[r];
+      const row = processedRows[r];
       if (!row) continue;
       const cells: string[] = [];
       for (let c = selRange.c1; c <= selRange.c2; c++) {
@@ -445,8 +501,8 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
       lines.forEach((line, lineIdx) => {
         const cells = line.split("\t");
         const rowIdx = ri + lineIdx;
-        if (rowIdx >= rows.length) return;
-        const row = rows[rowIdx];
+        if (rowIdx >= processedRows.length) return;
+        const row = processedRows[rowIdx];
         cells.forEach((cellVal, cellIdx) => {
           const colIdx = ci + cellIdx;
           if (colIdx >= columns.length) return;
@@ -467,7 +523,7 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
   };
 
   const handleKeyDown = (e: React.KeyboardEvent, ri: number, ci: number) => {
-    if (mentionState) return; // let MentionDropdown handle keys
+    if (mentionState) return;
 
     if (editingCell) {
       if (e.key === "Enter") { e.preventDefault(); commitEdit(); moveFocus(ri + 1, ci); }
@@ -476,11 +532,10 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
       return;
     }
 
-    // Clipboard shortcuts
     if ((e.ctrlKey || e.metaKey) && e.key === "c") {
       e.preventDefault();
       if (isMultiSelect) { handleCopySelection(); }
-      else { const row = rows[ri]; const col = columns[ci]; if (row && col) { navigator.clipboard.writeText(String(row.row_data[col.key] ?? "")); toast.success("Ячейка скопирована"); } }
+      else { const row = processedRows[ri]; const col = columns[ci]; if (row && col) { navigator.clipboard.writeText(String(row.row_data[col.key] ?? "")); toast.success("Ячейка скопирована"); } }
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key === "v" && canEdit) {
@@ -489,14 +544,13 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
       return;
     }
 
-    // Selection with Shift
     if (e.shiftKey && ["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft"].includes(e.key)) {
       e.preventDefault();
       const anchor = selAnchor || { r: ri, c: ci };
       if (!selAnchor) setSelAnchor(anchor);
       const end = selEnd || anchor;
       let nr = end.r, nc = end.c;
-      if (e.key === "ArrowDown") nr = Math.min(nr + 1, rows.length - 1);
+      if (e.key === "ArrowDown") nr = Math.min(nr + 1, processedRows.length - 1);
       if (e.key === "ArrowUp") nr = Math.max(nr - 1, 0);
       if (e.key === "ArrowRight") nc = Math.min(nc + 1, columns.length - 1);
       if (e.key === "ArrowLeft") nc = Math.max(nc - 1, 0);
@@ -512,7 +566,7 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
       case "ArrowLeft":  e.preventDefault(); setSelAnchor(null); setSelEnd(null); moveFocus(ri, ci - 1); break;
       case "Enter": case "F2":
         e.preventDefault();
-        if (canEdit && rows[ri]) { const col = columns[ci]; if (col && col.type !== "checkbox") startEditing(rows[ri].id, col, rows[ri].row_data[col.key] ?? ""); }
+        if (canEdit && processedRows[ri]) { const col = columns[ci]; if (col && col.type !== "checkbox") startEditing(processedRows[ri].id, col, processedRows[ri].row_data[col.key] ?? ""); }
         break;
       case "Delete":
         e.preventDefault();
@@ -520,12 +574,12 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
           if (isMultiSelect && selRange) {
             for (let r = selRange.r1; r <= selRange.r2; r++) {
               for (let c = selRange.c1; c <= selRange.c2; c++) {
-                const row = rows[r]; const col = columns[c];
+                const row = processedRows[r]; const col = columns[c];
                 if (row && col) onCellChange(row.id, col.key, col.type === "checkbox" ? false : "");
               }
             }
-          } else if (rows[ri]) {
-            const col = columns[ci]; if (col) onCellChange(rows[ri].id, col.key, col.type === "checkbox" ? false : "");
+          } else if (processedRows[ri]) {
+            const col = columns[ci]; if (col) onCellChange(processedRows[ri].id, col.key, col.type === "checkbox" ? false : "");
           }
         }
         break;
@@ -533,11 +587,11 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
         setSelAnchor(null); setSelEnd(null);
         break;
       default:
-        if (canEdit && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && rows[ri]) {
+        if (canEdit && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && processedRows[ri]) {
           const col = columns[ci];
           if (col && col.type !== "checkbox") {
             setSelAnchor(null); setSelEnd(null);
-            setEditingCell({ rowId: rows[ri].id, colKey: col.key }); setEditValue(e.key);
+            setEditingCell({ rowId: processedRows[ri].id, colKey: col.key }); setEditValue(e.key);
             setTimeout(() => inputRef.current?.focus(), 0);
           }
         }
@@ -593,11 +647,11 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
         </td>
       );
     }
-    // Display value with smart chips for text columns
+    const locale = { ru: "ru-RU", kk: "kk-KZ", en: "en-US" }[typeof window !== "undefined" ? (localStorage.getItem("language") || "ru") : "ru"] ?? "ru-RU";
     const displayContent = col.type === "text" && typeof value === "string" && value.includes("@[")
       ? <CellWithChips text={value} />
       : col.type === "date" && value
-        ? (() => { try { return new Date(String(value)).toLocaleDateString("ru-RU"); } catch { return String(value); } })()
+        ? (() => { try { return new Date(String(value)).toLocaleDateString(locale); } catch { return String(value); } })()
         : String(value ?? "") || <span className="text-muted-foreground/30">&mdash;</span>;
 
     return (
@@ -612,27 +666,88 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
   };
 
   return (
-    <div className="relative" data-no-global-ctx>
-      <div className="overflow-auto max-h-[calc(100vh-16rem)] border rounded-lg bg-background">
+    <div className="relative" data-no-global-ctx onClick={() => showColPanel && setShowColPanel(false)}>
+      {/* ── Toolbar: search + column visibility + sort badge ── */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <div className="relative flex-1 min-w-[160px] max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <input type="text" value={tableSearch} onChange={e => setTableSearch(e.target.value)}
+            placeholder="Поиск в таблице..." className="h-8 pl-8 pr-3 text-sm border border-border rounded-md bg-background w-full focus:outline-none focus:ring-1 focus:ring-primary/50" />
+        </div>
+        <div className="relative" onClick={e => e.stopPropagation()}>
+          <button onClick={() => setShowColPanel(v => !v)}
+            className={`h-8 px-2.5 text-xs border border-border rounded-md flex items-center gap-1.5 transition-colors ${hiddenCols.size > 0 ? "bg-primary/10 text-primary border-primary/30" : "bg-background hover:bg-muted"}`}>
+            <Eye className="h-3.5 w-3.5" />
+            <span>Колонки</span>
+            {hiddenCols.size > 0 && <span className="bg-primary text-primary-foreground rounded-full text-[9px] w-4 h-4 flex items-center justify-center font-bold">{hiddenCols.size}</span>}
+          </button>
+          {showColPanel && (
+            <div className="absolute right-0 top-9 bg-popover border border-border rounded-lg shadow-xl p-2 z-50 min-w-[180px]">
+              <p className="text-[11px] font-semibold text-muted-foreground mb-1 px-1 uppercase tracking-wide">Видимость колонок</p>
+              {allColumns.map(col => (
+                <label key={col.key} className="flex items-center gap-2 px-2 py-1.5 hover:bg-muted rounded cursor-pointer">
+                  <input type="checkbox" checked={!hiddenCols.has(col.key)}
+                    onChange={() => setHiddenCols(prev => { const next = new Set(prev); if (next.has(col.key)) next.delete(col.key); else next.add(col.key); return next; })}
+                    className="h-3.5 w-3.5 accent-primary" />
+                  <span className="text-sm">{col.label}</span>
+                </label>
+              ))}
+              {hiddenCols.size > 0 && (
+                <button onClick={() => setHiddenCols(new Set())} className="w-full mt-1 px-2 py-1 text-[11px] text-primary hover:bg-primary/10 rounded transition-colors text-left">
+                  Показать все
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        {sortConfig && (
+          <button onClick={() => setSortConfig(null)} className="h-8 px-2 text-[11px] border border-border rounded-md bg-muted/50 hover:bg-muted flex items-center gap-1 text-muted-foreground">
+            {sortConfig.dir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            {allColumns.find(c => c.key === sortConfig.key)?.label}
+            <X className="h-3 w-3 ml-0.5" />
+          </button>
+        )}
+        <span className="text-xs text-muted-foreground ml-auto">
+          {(tableSearch.trim() || sortConfig) && rows.length !== processedRows.length
+            ? <span className="text-primary font-medium">{processedRows.length}</span>
+            : processedRows.length} / {rows.length} строк
+        </span>
+      </div>
+
+      {/* ── Table ── */}
+      <div className="overflow-auto max-h-[calc(100vh-18rem)] border rounded-lg bg-background">
         <table className="w-full text-sm border-collapse">
           <thead className="sticky top-0 z-10">
             <tr className="bg-muted/70 backdrop-blur-sm border-b-2 border-border">
-              <th className="px-3 py-3 text-left text-xs font-bold text-muted-foreground w-12 border-r border-border sticky left-0 bg-muted/70 z-20">#</th>
-              {columns.map((col) => (
-                <th key={col.key} className="px-3 py-3 text-left text-xs font-bold text-muted-foreground min-w-[150px] border-r border-border">
-                  <div className="flex items-center gap-1.5">
-                    {col.type === "number" && <Hash className="h-3 w-3" />}
-                    {col.type === "date" && <CalendarDays className="h-3 w-3" />}
-                    {col.type === "checkbox" && <CheckSquare className="h-3 w-3" />}
-                    {col.type === "text" && <Type className="h-3 w-3" />}
-                    {col.label}
-                  </div>
-                </th>
-              ))}
+              <th className="px-3 py-2.5 text-left text-xs font-bold text-muted-foreground w-12 border-r border-border sticky left-0 bg-muted/70 z-20">#</th>
+              {columns.map((col) => {
+                const w = colWidths[col.key];
+                const isSorted = sortConfig?.key === col.key;
+                return (
+                  <th key={col.key} style={w ? { width: w, minWidth: w } : { minWidth: 120 }}
+                    className="relative text-left text-xs font-bold text-muted-foreground border-r border-border group/th">
+                    <div className="flex items-center gap-1 px-3 py-2.5 cursor-pointer select-none hover:bg-muted/50 transition-colors pr-4"
+                      onClick={() => handleSort(col.key)}>
+                      {col.type === "number" && <Hash className="h-3 w-3 shrink-0" />}
+                      {col.type === "date" && <CalendarDays className="h-3 w-3 shrink-0" />}
+                      {col.type === "checkbox" && <CheckSquare className="h-3 w-3 shrink-0" />}
+                      {col.type === "text" && <Type className="h-3 w-3 shrink-0" />}
+                      <span className="truncate">{col.label}</span>
+                      {isSorted
+                        ? (sortConfig!.dir === "asc" ? <ChevronUp className="h-3 w-3 ml-auto shrink-0 text-primary" /> : <ChevronDown className="h-3 w-3 ml-auto shrink-0 text-primary" />)
+                        : <ChevronsUpDown className="h-3 w-3 ml-auto shrink-0 opacity-0 group-hover/th:opacity-40 transition-opacity" />
+                      }
+                    </div>
+                    {/* Resize handle */}
+                    <div className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/50 active:bg-primary transition-colors z-10"
+                      onMouseDown={(e) => startResize(e, col.key)} />
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, ri) => {
+            {processedRows.map((row, ri) => {
               const colorVal = rowColors[row.id] || "";
               const colorClass = ROW_COLORS.find(c => c.value === colorVal)?.class || "";
               return (
@@ -644,12 +759,46 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
               );
             })}
           </tbody>
+          {/* Stats footer row for number columns */}
+          {numStats.length > 0 && processedRows.length > 0 && (
+            <tfoot>
+              <tr className="bg-muted/40 border-t-2 border-border">
+                <td className="px-3 py-1.5 sticky left-0 bg-muted/40">
+                  <div className="flex items-center gap-1 text-[10px] font-bold text-muted-foreground uppercase tracking-wide">
+                    <SigmaSquare className="h-3 w-3" /> Σ
+                  </div>
+                </td>
+                {columns.map(col => {
+                  const stat = numStats.find(s => s.key === col.key);
+                  return (
+                    <td key={col.key} className="px-3 py-1.5 border-r border-border">
+                      {stat ? (
+                        <div className="text-right">
+                          <span className="text-xs font-semibold text-foreground" title={`Сумма: ${stat.sum} | Среднее: ${stat.avg} | Заполнено: ${stat.count} строк`}>
+                            {stat.sum.toLocaleString("ru-RU")}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground ml-1.5">∅{stat.avg}</span>
+                        </div>
+                      ) : null}
+                    </td>
+                  );
+                })}
+              </tr>
+            </tfoot>
+          )}
         </table>
         {rows.length === 0 && (
           <div className="text-center py-16 text-muted-foreground">
             <Table2 className="h-10 w-10 mx-auto mb-3 opacity-20" />
             <p className="text-sm font-medium">Пустая таблица</p>
             <p className="text-xs mt-1">Нажмите «Добавить строку» чтобы начать</p>
+          </div>
+        )}
+        {rows.length > 0 && processedRows.length === 0 && (
+          <div className="text-center py-12 text-muted-foreground">
+            <Search className="h-8 w-8 mx-auto mb-2 opacity-30" />
+            <p className="text-sm font-medium">Нет совпадений</p>
+            <p className="text-xs mt-1">Попробуйте другой запрос</p>
           </div>
         )}
       </div>
@@ -659,7 +808,7 @@ function SpreadsheetTable({ columns, rows, canEdit, onCellChange, onAddRow, onDe
           <Plus className="h-3.5 w-3.5" /> Добавить строку
         </button>
       )}
-      {ctxMenu && <ContextMenu state={ctxMenu} rows={rows} columns={columns} onClose={() => setCtxMenu(null)}
+      {ctxMenu && <ContextMenu state={ctxMenu} rows={processedRows} columns={columns} onClose={() => setCtxMenu(null)}
         onDeleteRow={() => onDeleteRow(ctxMenu.rowId)}
         onClearCell={() => { if (ctxMenu.colKey) onClearCell(ctxMenu.rowId, ctxMenu.colKey); }}
         onCopyCell={() => { if (ctxMenu.colKey) onCopyCell(ctxMenu.rowId, ctxMenu.colKey); }}

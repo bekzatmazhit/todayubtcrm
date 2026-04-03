@@ -1,8 +1,10 @@
 ﻿import { useState, useEffect, useCallback, useMemo } from "react";
+import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
+import { useTranslation } from "react-i18next";
 import {
   LayoutDashboard, Users, UsersRound, BookOpen, GraduationCap,
   Plus, Search, Pencil, Trash2, X, ChevronRight, ShieldAlert,
-  Phone, Mail, User, Building2, BookMarked, Check, CalendarDays,
+  Phone, Mail, User, Building2, BookMarked, Check, CalendarDays, KeyRound,
   Megaphone, Info, AlertTriangle, AlertCircle, Power, Activity,
   Server, Database, HardDrive, Cpu, RefreshCw, CircleCheck, ScrollText, Shield,
 } from "lucide-react";
@@ -153,6 +155,9 @@ function UsersTab({ toast }: { toast: ReturnType<typeof useToast>["toast"] }) {
   const [saving, setSaving] = useState(false);
   const [confirmDel, setConfirmDel] = useState<any | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [pwdUser, setPwdUser] = useState<any | null>(null);
+  const [newPwd, setNewPwd] = useState("");
+  const [savingPwd, setSavingPwd] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -197,6 +202,19 @@ function UsersTab({ toast }: { toast: ReturnType<typeof useToast>["toast"] }) {
     } catch (e: any) {
       toast({ variant: "destructive", title: "Ошибка", description: e.message });
     } finally { setSaving(false); }
+  }
+
+  async function handleChangePwd() {
+    if (!pwdUser || !newPwd) return;
+    setSavingPwd(true);
+    try {
+      await updateUser(pwdUser.id, { password: newPwd });
+      toast({ title: "Пароль изменён", description: `${pwdUser.name} ${pwdUser.surname}` });
+      setPwdUser(null);
+      setNewPwd("");
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Ошибка", description: e.message });
+    } finally { setSavingPwd(false); }
   }
 
   async function handleDelete() {
@@ -254,6 +272,9 @@ function UsersTab({ toast }: { toast: ReturnType<typeof useToast>["toast"] }) {
               <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                 <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-primary/10" onClick={() => openEdit(u)}>
                   <Pencil className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-amber-500/10 text-amber-600" onClick={() => { setPwdUser(u); setNewPwd(""); }}>
+                  <KeyRound className="h-3.5 w-3.5" />
                 </Button>
                 <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-destructive/10 text-destructive" onClick={() => setConfirmDel(u)}>
                   <Trash2 className="h-3.5 w-3.5" />
@@ -313,6 +334,34 @@ function UsersTab({ toast }: { toast: ReturnType<typeof useToast>["toast"] }) {
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Password change dialog */}
+      <Dialog open={!!pwdUser} onOpenChange={(o) => !o && setPwdUser(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Изменить пароль</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {pwdUser?.name} {pwdUser?.surname}
+          </p>
+          <div className="space-y-1">
+            <Label className="text-xs">Новый пароль</Label>
+            <Input
+              type="text"
+              value={newPwd}
+              onChange={(e) => setNewPwd(e.target.value)}
+              placeholder="Введите новый пароль"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPwdUser(null)}>Отмена</Button>
+            <Button onClick={handleChangePwd} disabled={!newPwd || newPwd.length < 4 || savingPwd}>
+              {savingPwd ? "Сохранение..." : "Сохранить"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         open={!!confirmDel}
@@ -410,7 +459,7 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
           <SelectTrigger className="w-40 h-9"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Все группы</SelectItem>
-            {groups.map((g) => <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>)}
+            {groups.map((g) => <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -493,7 +542,7 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
                 <Select value={form.group_id} onValueChange={(v) => setForm({ ...form, group_id: v })}>
                   <SelectTrigger><SelectValue placeholder="Выбрать группу" /></SelectTrigger>
                   <SelectContent>
-                    {groups.map((g) => <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>)}
+                    {groups.map((g) => <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -1183,6 +1232,8 @@ const BANNER_TYPE_CONFIG: Record<string, { label: string; color: string; icon: t
 };
 
 function BannersTab({ toast, userId }: { toast: any; userId?: string }) {
+  const { i18n } = useTranslation();
+  const locale = i18n.language === "kk" ? "kk-KZ" : i18n.language === "en" ? "en-US" : "ru-RU";
   const [banners, setBanners] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -1277,7 +1328,7 @@ function BannersTab({ toast, userId }: { toast: any; userId?: string }) {
                     <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground">
                       <Badge variant="outline" className={`text-[10px] ${cfg.color}`}>{cfg.label}</Badge>
                       <span>{banner.is_active ? "Активный" : "Отключён"}</span>
-                      {banner.expires_at && <span>до {new Date(banner.expires_at).toLocaleDateString("ru-RU")}</span>}
+                      {banner.expires_at && <span>до {new Date(banner.expires_at).toLocaleDateString(locale)}</span>}
                       <span>{banner.creator_name}</span>
                     </div>
                   </div>
@@ -1365,6 +1416,8 @@ const ENTITY_LABELS: Record<string, string> = {
 };
 
 function AuditTab() {
+  const { i18n } = useTranslation();
+  const locale = i18n.language === "kk" ? "kk-KZ" : i18n.language === "en" ? "en-US" : "ru-RU";
   const [logs, setLogs] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -1397,7 +1450,7 @@ function AuditTab() {
 
   const fmtDate = (d: string) => {
     const dt = new Date(d + "Z");
-    return dt.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+    return dt.toLocaleString(locale, { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
   };
 
   return (

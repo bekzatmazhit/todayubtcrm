@@ -26,7 +26,7 @@ const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(() => {
-    const saved = sessionStorage.getItem("today_crm_user");
+    const saved = localStorage.getItem("today_crm_user");
     return saved ? JSON.parse(saved) : null;
   });
 
@@ -53,7 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
 
       setUser(user);
-      sessionStorage.setItem("today_crm_user", JSON.stringify(user));
+      localStorage.setItem("today_crm_user", JSON.stringify(user));
       localStorage.setItem("today_crm_last_login", JSON.stringify({
         email: user.email,
         full_name: user.full_name,
@@ -72,14 +72,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }).catch(() => {});
 
     setUser(null);
-    sessionStorage.removeItem("today_crm_user");
+    localStorage.removeItem("today_crm_user");
   }, []);
 
   const updateAvatar = useCallback((avatar_url: string | null) => {
     setUser((prev) => {
       if (!prev) return prev;
       const updated = { ...prev, avatar_url: avatar_url || undefined };
-      sessionStorage.setItem("today_crm_user", JSON.stringify(updated));
+      localStorage.setItem("today_crm_user", JSON.stringify(updated));
       return updated;
     });
   }, []);
@@ -93,7 +93,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(prev => {
           if (!prev) return prev;
           const updated = { ...prev, permissions: perms };
-          sessionStorage.setItem("today_crm_user", JSON.stringify(updated));
+          localStorage.setItem("today_crm_user", JSON.stringify(updated));
           return updated;
         });
       })

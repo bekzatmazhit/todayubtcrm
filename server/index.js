@@ -237,7 +237,21 @@ app.get("/api/rooms", (req, res) => {
 
 app.get("/api/time-slots", (req, res) => {
   try {
-    res.json(db.prepare("SELECT * FROM time_slots ORDER BY id").all());
+    res.json(db.prepare("SELECT * FROM time_slots ORDER BY start_time").all());
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post("/api/time-slots", (req, res) => {
+  try {
+    const { start_time, end_time, label } = req.body;
+    if (!start_time || !end_time) return res.status(400).json({ error: "start_time and end_time required" });
+    // Return existing slot or create new
+    let slot = db.prepare("SELECT * FROM time_slots WHERE start_time = ? AND end_time = ?").get(start_time, end_time);
+    if (!slot) {
+      const result = db.prepare("INSERT INTO time_slots (start_time, end_time, label) VALUES (?, ?, ?)").run(start_time, end_time, label || null);
+      slot = db.prepare("SELECT * FROM time_slots WHERE id = ?").get(result.lastInsertRowid);
+    }
+    res.json(slot);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -445,17 +459,15 @@ app.post("/api/schedule/check-conflicts", (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-function checkConflicts({ teacher_id, room_id, time_slot_id, cycle, exclude_id, group_id }) {
+function checkConflicts({ teacher_id, time_slot_id, cycle, exclude_id, group_id }) {
   const conflicts = [];
   let excludeClause = "";
   const params1 = [teacher_id, time_slot_id, cycle];
-  const params2 = [room_id, time_slot_id, cycle];
   const params3 = group_id ? [group_id, time_slot_id, cycle] : null;
 
   if (exclude_id) {
     excludeClause = " AND s.id != ?";
     params1.push(exclude_id);
-    params2.push(exclude_id);
     if (params3) params3.push(exclude_id);
   }
 
@@ -471,20 +483,6 @@ function checkConflicts({ teacher_id, room_id, time_slot_id, cycle, exclude_id, 
 
   if (teacherConflicts.length > 0) {
     conflicts.push(...teacherConflicts.map(c => ({ type: "teacher", ...c })));
-  }
-
-  // Room conflict: same room, same time slot, same cycle
-  const roomConflicts = db.prepare(`
-    SELECT s.id, g.name as group_name, subj.name as subject_name, r.name as room_name
-    FROM schedule s
-    LEFT JOIN groups g ON s.group_id = g.id
-    LEFT JOIN subjects subj ON s.subject_id = subj.id
-    LEFT JOIN rooms r ON s.room_id = r.id
-    WHERE s.room_id = ? AND s.time_slot_id = ? AND s.cycle = ?${excludeClause}
-  `).all(...params2);
-
-  if (roomConflicts.length > 0) {
-    conflicts.push(...roomConflicts.map(c => ({ type: "room", ...c })));
   }
 
   // Group conflict: same group, same time slot, same cycle
@@ -597,6 +595,199 @@ app.get("/api/students/:id", (req, res) => {
     `).all(req.params.id);
 
     res.json({ ...student, attendance_stats: stats, recent_attendance: recent, ent_results: entResults });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ====================== STUDENT-360 DASHBOARD ======================
+app.get("/api/student-360/:id", (req, res) => {
+  try {
+    const sid = parseInt(req.params.id);
+    if (!sid) return res.status(400).json({ error: "Invalid student id" });
+
+    const student = db.prepare(`
+      SELECT s.id, s.full_name, s.phone, s.parent_phone, s.parent_name,
+             s.group_id, s.status, s.avatar_url,
+             g.name as group_name,
+             p.name as profile_name,
+             g.curator_id,
+             u.name || ' ' || u.surname as curator_name,
+             u.phone as curator_phone
+      FROM students s
+      LEFT JOIN groups g ON s.group_id = g.id
+      LEFT JOIN profiles p ON g.profile_id = p.id
+      LEFT JOIN users u ON g.curator_id = u.id
+      WHERE s.id = ?
+    `).get(sid);
+    if (!student) return res.status(404).json({ error: "Student not found" });
+
+    const attStats = db.prepare(`
+      SELECT COUNT(*) AS total_lessons,
+        SUM(CASE WHEN status='present' THEN 1 ELSE 0 END) AS present_count,
+        SUM(CASE WHEN status='absent'  THEN 1 ELSE 0 END) AS absent_count,
+        SUM(CASE WHEN lateness='late'  THEN 1 ELSE 0 END) AS late_count,
+        SUM(CASE WHEN homework='done'  THEN 1 ELSE 0 END) AS hw_done_count,
+        ROUND(AVG(CASE WHEN status='present' THEN 1.0 ELSE 0.0 END)*100,1) AS attendance_rate,
+        ROUND(AVG(CASE WHEN homework='done'  THEN 1.0 ELSE 0.0 END)*100,1) AS homework_rate
+      FROM attendance WHERE student_id = ?
+    `).get(sid);
+
+    const attMonthly = db.prepare(`
+      SELECT strftime('%Y-%m', l.date) AS month,
+        COUNT(*) AS total,
+        SUM(CASE WHEN a.status='present' THEN 1 ELSE 0 END) AS present,
+        SUM(CASE WHEN a.status='absent'  THEN 1 ELSE 0 END) AS absent,
+        SUM(CASE WHEN a.lateness='late'  THEN 1 ELSE 0 END) AS late,
+        ROUND(AVG(CASE WHEN a.status='present' THEN 1.0 ELSE 0.0 END)*100,1) AS rate
+      FROM attendance a JOIN lessons l ON a.lesson_id = l.id
+      WHERE a.student_id = ? GROUP BY month ORDER BY month
+    `).all(sid);
+
+    const attBySubject = db.prepare(`
+      SELECT subj.name AS subject,
+        COUNT(*) AS total,
+        SUM(CASE WHEN a.status='present' THEN 1 ELSE 0 END) AS present,
+        SUM(CASE WHEN a.status='absent'  THEN 1 ELSE 0 END) AS absent,
+        SUM(CASE WHEN a.homework='done'  THEN 1 ELSE 0 END) AS hw_done,
+        ROUND(AVG(CASE WHEN a.status='present' THEN 1.0 ELSE 0.0 END)*100,1) AS rate
+      FROM attendance a
+      JOIN lessons l ON a.lesson_id = l.id
+      JOIN schedule sc ON l.schedule_id = sc.id
+      JOIN subjects subj ON sc.subject_id = subj.id
+      WHERE a.student_id = ? GROUP BY subj.id ORDER BY subj.name
+    `).all(sid);
+
+    const attRecords = db.prepare(`
+      SELECT l.date, subj.name AS subject,
+        u.name || ' ' || u.surname AS teacher,
+        a.status, a.lateness, a.homework, a.comment
+      FROM attendance a
+      JOIN lessons l ON a.lesson_id = l.id
+      JOIN schedule sc ON l.schedule_id = sc.id
+      LEFT JOIN subjects subj ON sc.subject_id = subj.id
+      LEFT JOIN users u ON sc.teacher_id = u.id
+      WHERE a.student_id = ? ORDER BY l.date DESC LIMIT 40
+    `).all(sid);
+
+    const entFlat = db.prepare(`
+      SELECT e.month, e.score, subj.name AS subject, subj.type
+      FROM ent_results e JOIN subjects subj ON e.subject_id = subj.id
+      WHERE e.student_id = ? ORDER BY e.month, subj.name
+    `).all(sid);
+
+    const entMap = {};
+    for (const row of entFlat) {
+      if (!entMap[row.month]) entMap[row.month] = { month: row.month, subjects: [], total: 0 };
+      entMap[row.month].subjects.push({ name: row.subject, score: row.score, type: row.type });
+      entMap[row.month].total += row.score;
+    }
+    const entByMonth = Object.values(entMap).sort((a, b) => a.month.localeCompare(b.month));
+
+    const entBySubject = db.prepare(`
+      SELECT subj.name AS subject,
+        COUNT(*) AS months_tested,
+        MIN(e.score) AS score_min, MAX(e.score) AS score_max,
+        ROUND(AVG(e.score),1) AS score_avg
+      FROM ent_results e JOIN subjects subj ON e.subject_id = subj.id
+      WHERE e.student_id = ? GROUP BY subj.id ORDER BY subj.name
+    `).all(sid);
+
+    const lastEntMonth = entByMonth.length > 0 ? entByMonth[entByMonth.length - 1].month : null;
+    let groupBenchmark = [], rankInGroup = null, groupSize = 0;
+    if (lastEntMonth && student.group_id) {
+      const groupScores = db.prepare(`
+        SELECT e.student_id, SUM(e.score) AS total
+        FROM ent_results e JOIN students s ON e.student_id = s.id
+        WHERE s.group_id = ? AND e.month = ?
+        GROUP BY e.student_id ORDER BY total DESC
+      `).all(student.group_id, lastEntMonth);
+      groupSize = groupScores.length;
+      const ri = groupScores.findIndex(r => r.student_id === sid);
+      rankInGroup = ri >= 0 ? ri + 1 : null;
+      groupBenchmark = db.prepare(`
+        SELECT subj.name AS subject,
+          ROUND(AVG(e.score),1) AS group_avg, MAX(e.score) AS group_max
+        FROM ent_results e JOIN subjects subj ON e.subject_id = subj.id
+        JOIN students s ON e.student_id = s.id
+        WHERE s.group_id = ? AND e.month = ? GROUP BY subj.id
+      `).all(student.group_id, lastEntMonth);
+    }
+
+    const teacherFeedback = db.prepare(`
+      SELECT tsf.month, tsf.comment,
+        u.name || ' ' || u.surname AS teacher_name,
+        subj.name AS subject_name, tsf.created_at
+      FROM teacher_student_feedback tsf
+      JOIN users u ON tsf.teacher_id = u.id
+      LEFT JOIN subjects subj ON tsf.subject_id = subj.id
+      WHERE tsf.student_id = ? ORDER BY tsf.month DESC, tsf.created_at DESC
+    `).all(sid);
+
+    const parentFeedback = db.prepare(`
+      SELECT pf.date, pf.notes, pf.status,
+        u.name || ' ' || u.surname AS curator_name
+      FROM parent_feedback pf JOIN users u ON pf.curator_id = u.id
+      WHERE pf.student_id = ? ORDER BY pf.date DESC
+    `).all(sid);
+
+    const callHistory = db.prepare(`
+      SELECT cct.month, cct.status, cct.call_result, cct.notes, cct.completed_at,
+        u.name || ' ' || u.surname AS curator_name
+      FROM curator_call_tasks cct JOIN users u ON cct.curator_id = u.id
+      WHERE cct.student_id = ? ORDER BY cct.month DESC
+    `).all(sid);
+
+    const curatorLogs = db.prepare(`
+      SELECT cl.date, cl.type, cl.title, cl.description
+      FROM curatorship_logs cl
+      WHERE cl.group_id = ? AND cl.date >= date('now','-180 days')
+      ORDER BY cl.date DESC LIMIT 20
+    `).all(student.group_id || 0);
+
+    const studentQuizzes = db.prepare(`
+      SELECT q.id, q.title, q.date, qr.score,
+             u.name || ' ' || u.surname AS teacher_name,
+             subj.name AS subject_name
+      FROM quiz_results qr
+      JOIN quizzes q ON qr.quiz_id = q.id
+      LEFT JOIN users u ON q.created_by = u.id
+      LEFT JOIN schedule sc ON q.schedule_id = sc.id
+      LEFT JOIN subjects subj ON sc.subject_id = subj.id
+      WHERE qr.student_id = ?
+      ORDER BY q.date DESC, q.id DESC
+      LIMIT 50
+    `).all(sid);
+
+    const lastEntTotal  = entByMonth.length > 0 ? entByMonth[entByMonth.length - 1].total : null;
+    const prevEntTotal  = entByMonth.length > 1 ? entByMonth[entByMonth.length - 2].total : null;
+    const entDelta      = lastEntTotal !== null && prevEntTotal !== null ? lastEntTotal - prevEntTotal : null;
+    let consecutiveAbsences = 0;
+    for (const r of attRecords) { if (r.status === "absent") consecutiveAbsences++; else break; }
+
+    res.json({
+      id: student.id, full_name: student.full_name,
+      phone: student.phone, parentPhone: student.parent_phone,
+      parentName: student.parent_name, status: student.status,
+      avatar_url: student.avatar_url,
+      group: {
+        id: student.group_id, name: student.group_name,
+        profileName: student.profile_name,
+        curatorName: student.curator_name, curatorPhone: student.curator_phone,
+      },
+      hero: {
+        attendanceRate: attStats.attendance_rate,
+        homeworkRate: attStats.homework_rate,
+        totalLessons: attStats.total_lessons,
+        presentCount: attStats.present_count,
+        absentCount: attStats.absent_count,
+        lateCount: attStats.late_count,
+        hwDoneCount: attStats.hw_done_count,
+        entLastScore: lastEntTotal,
+        entDelta, rankInGroup, groupSize, consecutiveAbsences,
+      },
+      attendance: { stats: attStats, byMonth: attMonthly, bySubject: attBySubject, records: attRecords },
+      ent: { byMonth: entByMonth, bySubject: entBySubject, groupBenchmark, lastMonth: lastEntMonth },
+      teacherFeedback, parentFeedback, callHistory, curatorLogs, quizzes: studentQuizzes,
+    });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -766,6 +957,69 @@ app.get("/api/attendance/marked-lessons", (req, res) => {
   }
 });
 
+// Admin: schedule fill status per teacher per date
+app.get("/api/admin/schedule-fill-status", (req, res) => {
+  try {
+    const { from, to } = req.query;
+    if (!from || !to) return res.status(400).json({ error: "from and to required" });
+
+    const scheduleEntries = db.prepare(`
+      SELECT s.id, s.teacher_id, s.cycle,
+             u.name || ' ' || u.surname as teacher_name,
+             g.name as group_name,
+             subj.name as subject_name,
+             ts.label as time_label, ts.start_time
+      FROM schedule s
+      LEFT JOIN users u ON s.teacher_id = u.id
+      LEFT JOIN groups g ON s.group_id = g.id
+      LEFT JOIN subjects subj ON s.subject_id = subj.id
+      LEFT JOIN time_slots ts ON s.time_slot_id = ts.id
+      ORDER BY u.name, ts.start_time
+    `).all();
+
+    function getDaysForCycle(cycle) {
+      if (cycle === "PSP") return [1, 3, 5];
+      if (cycle === "VChS") return [2, 4, 6];
+      return [];
+    }
+
+    const markedLessons = db.prepare(`
+      SELECT DISTINCT l.schedule_id, l.date
+      FROM lessons l
+      JOIN attendance a ON a.lesson_id = l.id
+      WHERE l.date BETWEEN ? AND ?
+    `).all(from, to);
+    const markedSet = new Set(markedLessons.map(ml => `${ml.schedule_id}:${ml.date}`));
+
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+
+    const result = [];
+    for (const entry of scheduleEntries) {
+      const days = getDaysForCycle(entry.cycle);
+      for (let d = new Date(fromDate); d <= toDate; d.setDate(d.getDate() + 1)) {
+        if (days.includes(d.getDay())) {
+          const date = d.toISOString().split("T")[0];
+          result.push({
+            schedule_id: entry.id,
+            teacher_id: entry.teacher_id,
+            teacher_name: entry.teacher_name,
+            group_name: entry.group_name,
+            subject_name: entry.subject_name,
+            time_label: entry.time_label,
+            start_time: entry.start_time,
+            cycle: entry.cycle,
+            date,
+            has_attendance: markedSet.has(`${entry.id}:${date}`),
+          });
+        }
+      }
+    }
+
+    res.json(result);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 // ====================== AD-HOC LESSONS ======================
 
 app.get("/api/adhoc-lessons", (req, res) => {
@@ -845,8 +1099,85 @@ app.delete("/api/adhoc-lessons/:id", (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// ====================== ENT RESULTS ======================
+// ====================== QUIZZES / КОНТРОЛЬНЫЙ ТЕСТ ======================
 
+app.post("/api/quizzes", (req, res) => {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS quizzes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, schedule_id INTEGER, date TEXT NOT NULL,
+        title TEXT NOT NULL, created_by INTEGER, created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(schedule_id) REFERENCES schedule(id) ON DELETE SET NULL,
+        FOREIGN KEY(created_by) REFERENCES users(id)
+      );
+      CREATE TABLE IF NOT EXISTS quiz_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, quiz_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL, score REAL,
+        FOREIGN KEY(quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id),
+        UNIQUE(quiz_id, student_id)
+      );
+    `);
+    const { schedule_id, date, title, results, created_by } = req.body;
+    if (!date || !title) return res.status(400).json({ error: "date and title required" });
+    const q = db.prepare(
+      "INSERT INTO quizzes (schedule_id, date, title, created_by) VALUES (?, ?, ?, ?)"
+    ).run(schedule_id || null, date, title, created_by || null);
+    const qId = q.lastInsertRowid;
+    if (results && Array.isArray(results)) {
+      const stmt = db.prepare("INSERT OR REPLACE INTO quiz_results (quiz_id, student_id, score) VALUES (?, ?, ?)");
+      for (const r of results) stmt.run(qId, r.student_id, r.score ?? null);
+    }
+    res.json({ id: qId, success: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.get("/api/quizzes", (req, res) => {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS quizzes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, schedule_id INTEGER, date TEXT NOT NULL,
+        title TEXT NOT NULL, created_by INTEGER, created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(schedule_id) REFERENCES schedule(id) ON DELETE SET NULL,
+        FOREIGN KEY(created_by) REFERENCES users(id)
+      );
+      CREATE TABLE IF NOT EXISTS quiz_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, quiz_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL, score REAL,
+        FOREIGN KEY(quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id),
+        UNIQUE(quiz_id, student_id)
+      );
+    `);
+    const { schedule_id, date, student_id } = req.query;
+    if (student_id) {
+      const rows = db.prepare(`
+        SELECT q.id, q.title, q.date, qr.score,
+               u.name || ' ' || u.surname AS teacher_name,
+               subj.name AS subject_name
+        FROM quiz_results qr
+        JOIN quizzes q ON qr.quiz_id = q.id
+        LEFT JOIN users u ON q.created_by = u.id
+        LEFT JOIN schedule sc ON q.schedule_id = sc.id
+        LEFT JOIN subjects subj ON sc.subject_id = subj.id
+        WHERE qr.student_id = ?
+        ORDER BY q.date DESC, q.id DESC
+      `).all(parseInt(student_id));
+      return res.json(rows);
+    }
+    const params = [];
+    let where = "WHERE 1=1";
+    if (schedule_id) { where += " AND q.schedule_id = ?"; params.push(schedule_id); }
+    if (date)        { where += " AND q.date = ?";        params.push(date); }
+    const quizzes = db.prepare(`SELECT q.id, q.title, q.date FROM quizzes q ${where} ORDER BY q.id DESC`).all(...params);
+    for (const q of quizzes) {
+      q.results = db.prepare("SELECT student_id, score FROM quiz_results WHERE quiz_id = ?").all(q.id);
+    }
+    res.json(quizzes);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ====================== ENT RESULTS ======================
 app.get("/api/ent-results", (req, res) => {
   try {
     const { month, group_id } = req.query;
@@ -1323,6 +1654,16 @@ app.put("/api/students/:id", (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Archive a student: set status=archived, remove from group
+app.patch("/api/students/:id/archive", (req, res) => {
+  try {
+    db.prepare("UPDATE students SET status = 'archived', group_id = NULL WHERE id = ?").run(req.params.id);
+    const student = db.prepare("SELECT full_name FROM students WHERE id = ?").get(req.params.id);
+    logAction(req, { action: "archive", entityType: "student", entityId: Number(req.params.id), entityName: student?.full_name });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Subjects: create
 app.post("/api/subjects", (req, res) => {
   try {
@@ -1598,6 +1939,94 @@ app.get("/api/curatorship/attendance-grid", (req, res) => {
     });
 
     res.json({ dates, students: result });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ====================== ADMIN ATTENDANCE RECONCILIATION ======================
+app.get("/api/admin/attendance-reconciliation", (req, res) => {
+  try {
+    const { from, to, group_id } = req.query;
+    if (!from || !to) return res.status(400).json({ error: "from and to required" });
+
+    // 1) Get students: either one group or all active
+    let students;
+    if (group_id) {
+      students = db.prepare(`
+        SELECT s.id, s.full_name, s.status, g.name AS group_name,
+               p.name AS profile_name,
+               u.name || ' ' || u.surname AS curator_name
+        FROM students s
+        LEFT JOIN groups g ON s.group_id = g.id
+        LEFT JOIN profiles p ON g.profile_id = p.id
+        LEFT JOIN users u ON g.curator_id = u.id
+        WHERE s.group_id = ? AND s.status = 'active' ORDER BY g.name, s.full_name
+      `).all(parseInt(group_id));
+    } else {
+      students = db.prepare(`
+        SELECT s.id, s.full_name, s.status, g.name AS group_name,
+               p.name AS profile_name,
+               u.name || ' ' || u.surname AS curator_name
+        FROM students s
+        LEFT JOIN groups g ON s.group_id = g.id
+        LEFT JOIN profiles p ON g.profile_id = p.id
+        LEFT JOIN users u ON g.curator_id = u.id
+        WHERE s.status = 'active' ORDER BY g.name, s.full_name
+      `).all();
+    }
+    if (!students.length) return res.json({ dates: [], students: [], groups: [] });
+
+    // 2) Get all unique dates where at least one lesson existed (always global)
+    const dateQuery = db.prepare(`
+      SELECT DISTINCT l.date FROM lessons l
+      WHERE l.date BETWEEN ? AND ? ORDER BY l.date
+    `).all(from, to);
+    const dates = dateQuery.map(r => r.date);
+
+    // 3) Get all attendance records
+    const studentIds = students.map(s => s.id);
+    const placeholders = studentIds.map(() => "?").join(",");
+    const records = db.prepare(`
+      SELECT a.student_id, l.date, a.status, a.lateness
+      FROM attendance a
+      JOIN lessons l ON a.lesson_id = l.id
+      WHERE a.student_id IN (${placeholders}) AND l.date BETWEEN ? AND ?
+    `).all(...studentIds, from, to);
+
+    // 4) Build lookup
+    const lookup = {};
+    for (const r of records) {
+      if (!lookup[r.student_id]) lookup[r.student_id] = {};
+      const key = r.date;
+      // A student may have multiple lessons per day, take worst status
+      const existing = lookup[r.student_id][key];
+      const val = r.status === "present" ? (r.lateness === "late" ? "late" : "present") : "absent";
+      if (!existing || val === "absent") lookup[r.student_id][key] = val;
+    }
+
+    // 5) Build result
+    const result = students.map(s => {
+      const att = {};
+      let presentDays = 0, absentDays = 0, lateDays = 0, noData = 0;
+      for (const d of dates) {
+        const v = lookup[s.id]?.[d] || null;
+        att[d] = v;
+        if (v === "present") presentDays++;
+        else if (v === "late") { lateDays++; presentDays++; }
+        else if (v === "absent") absentDays++;
+        else noData++;
+      }
+      return {
+        id: s.id, full_name: s.full_name, group_name: s.group_name,
+        profile_name: s.profile_name, curator_name: s.curator_name,
+        status: s.status, attendance: att,
+        summary: { present: presentDays, absent: absentDays, late: lateDays, noData, total: dates.length }
+      };
+    });
+
+    // 6) Groups list for filter
+    const groups = db.prepare(`SELECT id, name FROM groups ORDER BY name`).all();
+
+    res.json({ dates, students: result, groups });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
