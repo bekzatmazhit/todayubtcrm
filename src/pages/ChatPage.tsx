@@ -145,7 +145,7 @@ export default function ChatPage() {
     <div className="h-[calc(100vh-4rem)] flex">
       {/* Sidebar — rooms + online users */}
       <div className="w-64 border-r bg-muted/30 flex flex-col shrink-0 hidden md:flex">
-        <div className="p-4 font-heading font-bold text-lg">Чат</div>
+        <div className="p-4" />
         <Separator />
         <div className="p-3">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Каналы</p>

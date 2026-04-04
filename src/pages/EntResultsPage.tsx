@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import * as XLSX from "xlsx";
+import { addExcelWatermarkSheet } from "@/lib/watermark";
 import {
   BarChart3, Users, TrendingUp, Edit, ArrowUp, ArrowDown, Minus,
   Trophy, Medal, Crown, Filter, ChevronsUpDown, ChevronUp, ChevronDown,
@@ -787,6 +788,7 @@ function EntXlsxImportDialog({ open, onOpenChange, groups, groupProfileMap, stud
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "ЕНТ Баллы");
+    addExcelWatermarkSheet(XLSX, wb);
     XLSX.writeFile(wb, `ent_${entMode}_template_${activeMonth}.xlsx`);
   };
 
@@ -1480,21 +1482,6 @@ export default function EntResultsPage() {
 
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-center gap-3 mb-4 md:mb-6">
-        <div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-          <BarChart3 className="h-4 w-4 md:h-5 md:w-5 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-lg md:text-2xl font-heading font-bold text-foreground">Результаты ЕНТ</h1>
-          <p className="text-xs md:text-sm text-muted-foreground">
-            Баллы учеников по предметам и месяцам
-            {selectedGroup && <span> · <strong>{selectedGroup.profile_name}</strong></span>}
-            {isAllGroups && <span> · <strong>Все группы</strong></span>}
-          </p>
-        </div>
-      </div>
-
       {/* Group & search filters */}
       <div className="flex flex-wrap gap-2 md:gap-3 mb-3">
         <Select value={selectedGroupId} onValueChange={setSelectedGroupId}>

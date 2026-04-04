@@ -1,7 +1,7 @@
 import {
   Calendar, Users, BarChart3, Shield, UsersRound, ListTodo,
   FolderOpen, Settings, LogOut, LayoutDashboard, BookOpen, ClipboardCheck, Megaphone, FileText,
-  ExternalLink, ChevronRight, MessageCircle, PieChart,
+  ExternalLink, ChevronRight, MessageCircle, PieChart, Activity, FileSpreadsheet, MoreHorizontal,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -28,8 +28,13 @@ const navItems = [
   { titleKey: "Grades", url: "/grades", icon: ClipboardCheck, roles: ["admin", "umo_head", "teacher"] },
   { titleKey: "Broadcasts", url: "/broadcasts", icon: Megaphone, roles: ["admin", "umo_head", "teacher"] },
   { titleKey: "Chat", url: "/chat", icon: MessageCircle, roles: ["admin", "umo_head", "teacher"], disabled: true },
-  { titleKey: "Dashboard", url: "/dashboard", icon: PieChart, roles: ["admin", "umo_head", "teacher"] },
+  { titleKey: "Export Reports", url: "/reports", icon: FileSpreadsheet, roles: ["admin", "umo_head"] },
   { titleKey: "Admin", url: "/admin", icon: LayoutDashboard, roles: ["admin", "umo_head"] },
+];
+
+const moreItems = [
+  { titleKey: "Dashboard", url: "/dashboard", icon: PieChart, roles: ["admin", "umo_head", "teacher"] },
+  { titleKey: "My Analytics", url: "/analytics", icon: Activity, roles: ["admin", "umo_head", "teacher"] },
   { titleKey: "Settings", url: "/settings", icon: Settings, roles: ["admin", "umo_head", "teacher"] },
 ];
 
@@ -43,8 +48,10 @@ export function AppSidebar({ onLogout }: { onLogout?: () => void }) {
   const handleLogout = onLogout || logout;
 
   const filteredItems = navItems.filter((item) => user && item.roles.includes(user.role));
+  const filteredMoreItems = moreItems.filter((item) => user && item.roles.includes(user.role));
 
   const isKnowledgeBaseOpen = location.pathname === "/wiki" || location.pathname === "/docs";
+  const isMoreOpen = isKnowledgeBaseOpen || moreItems.some((item) => location.pathname === item.url);
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
@@ -80,15 +87,15 @@ export function AppSidebar({ onLogout }: { onLogout?: () => void }) {
                 </SidebarMenuItem>
               ))}
 
-              {/* База знаний — Wiki + Docs */}
-              <Collapsible defaultOpen={isKnowledgeBaseOpen} className="group/collapsible">
+              {/* Ещё — Dashboard, Analytics, Settings, Knowledge Base */}
+              <Collapsible defaultOpen={isMoreOpen} className="group/collapsible">
                 <SidebarMenuItem>
                   <CollapsibleTrigger asChild>
                     <SidebarMenuButton className="hover:bg-sidebar-accent/60 rounded-lg transition-colors cursor-pointer">
-                      <BookOpen className="mr-3 h-5 w-5 flex-shrink-0" />
+                      <MoreHorizontal className="mr-3 h-5 w-5 flex-shrink-0" />
                       {!collapsed && (
                         <>
-                          <span className="flex-1">{t("Knowledge Base")}</span>
+                          <span className="flex-1">{t("More")}</span>
                           <ChevronRight className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-90" />
                         </>
                       )}
@@ -97,6 +104,21 @@ export function AppSidebar({ onLogout }: { onLogout?: () => void }) {
                   {!collapsed && (
                     <CollapsibleContent>
                       <SidebarMenuSub>
+                        {filteredMoreItems.map((item) => (
+                          <SidebarMenuSubItem key={item.titleKey}>
+                            <SidebarMenuSubButton asChild>
+                              <NavLink
+                                to={item.url}
+                                className="hover:bg-sidebar-accent/60 rounded-lg transition-colors"
+                                activeClassName="bg-sidebar-accent text-sidebar-accent-foreground font-semibold"
+                              >
+                                <item.icon className="mr-2 h-4 w-4 flex-shrink-0" />
+                                <span>{t(item.titleKey)}</span>
+                              </NavLink>
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
+                        ))}
+                        {/* База знаний — Wiki + Docs */}
                         <SidebarMenuSubItem>
                           <SidebarMenuSubButton asChild>
                             <NavLink

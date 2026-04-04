@@ -3,12 +3,18 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import multer from "multer";
+import crypto from "crypto";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import sharp from "sharp";
 import { WebSocketServer } from "ws";
 import { initializeDatabase, db } from "./db.js";
+
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString("hex");
+const JWT_EXPIRES_IN = "7d";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsDir = path.join(__dirname, "uploads");
@@ -74,6 +80,30 @@ app.use(globalLimiter);
 
 initializeDatabase();
 
+// ====================== JWT AUTH MIDDLEWARE ======================
+
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "Требуется авторизация" });
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = payload;
+    next();
+  } catch {
+    return res.status(401).json({ error: "Недействительный токен" });
+  }
+}
+
+// Apply auth to all /api/* except public endpoints and login
+app.use("/api", (req, res, next) => {
+  // Public routes that don't require auth
+  const publicPaths = ["/login", "/password-reset-request"];
+  if (publicPaths.includes(req.path)) return next();
+  if (req.path.startsWith("/public/")) return next();
+  authenticateToken(req, res, next);
+});
+
 // ====================== HELPERS ======================
 
 function logAction(req, { action, entityType, entityId, entityName, details, userId, userName } = {}) {
@@ -123,10 +153,12 @@ app.post("/api/login", loginLimiter, (req, res) => {
       FROM users u JOIN roles r ON u.role_id = r.id WHERE u.email = ?
     `).get(email);
 
-    if (!user || user.password !== password) return res.status(401).json({ error: "Invalid email or password" });
+    if (!user || !bcrypt.compareSync(password, user.password)) return res.status(401).json({ error: "Invalid email or password" });
+
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
     logAction(req, { action: "login", entityType: "user", entityId: user.id, entityName: user.name + " " + user.surname, userId: user.id, userName: user.name + " " + user.surname });
-    res.json({ id: user.id.toString(), email: user.email, full_name: user.name + " " + user.surname, role: user.role, avatar_url: user.avatar_url || null });
+    res.json({ id: user.id.toString(), email: user.email, full_name: user.name + " " + user.surname, role: user.role, avatar_url: user.avatar_url || null, token });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -939,6 +971,95 @@ app.delete("/api/students/:id", (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// ====================== STUDENT CERTIFICATES ======================
+
+const CERTIFICATE_TYPES = new Set(["march", "january", "grant1", "grant2"]);
+const certificateUpload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    if (ext !== ".pdf") return cb(new Error("Only PDF files are allowed"));
+    cb(null, true);
+  },
+});
+
+app.get("/api/students/:id/certificates", (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT id, student_id, cert_type, file_url, original_name, uploaded_by, uploaded_at
+      FROM student_certificates
+      WHERE student_id = ?
+      ORDER BY uploaded_at DESC
+    `).all(req.params.id);
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/students/:id/certificates", certificateUpload.single("file"), (req, res) => {
+  try {
+    const studentId = Number(req.params.id);
+    const certType = String(req.body.cert_type || "").trim();
+
+    if (!studentId) return res.status(400).json({ error: "Invalid student id" });
+    if (!CERTIFICATE_TYPES.has(certType)) {
+      return res.status(400).json({ error: "cert_type must be one of: march, january, grant1, grant2" });
+    }
+    if (!req.file) return res.status(400).json({ error: "PDF file is required" });
+
+    const fileUrl = `/uploads/${req.file.filename}`;
+    const uploadedBy = req.user?.id ? Number(req.user.id) : null;
+
+    const existing = db.prepare("SELECT file_url FROM student_certificates WHERE student_id = ? AND cert_type = ?").get(studentId, certType);
+    db.prepare("DELETE FROM student_certificates WHERE student_id = ? AND cert_type = ?").run(studentId, certType);
+    if (existing?.file_url) {
+      try {
+        const oldFilePath = path.join(uploadsDir, path.basename(existing.file_url));
+        if (fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
+      } catch (_) {
+        // Ignore old file deletion errors.
+      }
+    }
+
+    const result = db.prepare(`
+      INSERT INTO student_certificates (student_id, cert_type, file_url, original_name, uploaded_by)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(studentId, certType, fileUrl, req.file.originalname || null, uploadedBy);
+
+    const created = db.prepare(`
+      SELECT id, student_id, cert_type, file_url, original_name, uploaded_by, uploaded_at
+      FROM student_certificates
+      WHERE id = ?
+    `).get(result.lastInsertRowid);
+
+    res.json(created);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/students/:id/certificates/:certId", (req, res) => {
+  try {
+    const cert = db.prepare("SELECT * FROM student_certificates WHERE id = ? AND student_id = ?").get(req.params.certId, req.params.id);
+    if (!cert) return res.status(404).json({ error: "Certificate not found" });
+
+    db.prepare("DELETE FROM student_certificates WHERE id = ?").run(req.params.certId);
+
+    try {
+      const filePath = path.join(uploadsDir, path.basename(cert.file_url || ""));
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch (_) {
+      // Ignore file deletion errors to not fail API deletion.
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ====================== ATTENDANCE ======================
 
 // Fetch attendance for an existing lesson.
@@ -1733,10 +1854,11 @@ app.post("/api/users", (req, res) => {
     if (!name || !surname) return res.status(400).json({ error: "name and surname required" });
     const roleMap = { admin: 1, umo_head: 2, teacher: 3 };
     const role_id = roleMap[role] ?? 3;
-    const pwd = password || surname.toLowerCase() + Date.now();
+    const plainPwd = password || surname.toLowerCase() + Date.now();
+    const hashedPwd = bcrypt.hashSync(plainPwd, 10);
     const result = db.prepare(
       "INSERT INTO users (name, surname, phone, email, password, role_id) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run(name, surname, phone || null, email || null, pwd, role_id);
+    ).run(name, surname, phone || null, email || null, hashedPwd, role_id);
     logAction(req, { action: "create", entityType: "user", entityId: result.lastInsertRowid, entityName: name + " " + surname, details: JSON.stringify({ role, email }) });
     res.json({ id: result.lastInsertRowid, success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1753,10 +1875,11 @@ app.put("/api/users/:id", (req, res) => {
     if (password) {
       const user = db.prepare("SELECT password FROM users WHERE id = ?").get(req.params.id);
       if (!user) return res.status(404).json({ error: "User not found" });
-      if (current_password && user.password !== current_password) {
+      if (current_password && !bcrypt.compareSync(current_password, user.password)) {
         return res.status(400).json({ error: "Текущий пароль неверный" });
       }
-      db.prepare("UPDATE users SET password = ? WHERE id = ?").run(password, req.params.id);
+      const hashedPwd = bcrypt.hashSync(password, 10);
+      db.prepare("UPDATE users SET password = ? WHERE id = ?").run(hashedPwd, req.params.id);
     }
 
     db.prepare(`
@@ -2860,6 +2983,134 @@ app.get("/api/health", (req, res) => {
   }
 });
 
+// ====================== GOOGLE SHEETS IMPORT ======================
+app.post("/api/import-google-sheet", async (req, res) => {
+  try {
+    const { url, gid } = req.body;
+    if (!url) return res.status(400).json({ error: "URL required" });
+
+    // Extract spreadsheet ID from URL
+    const idMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+    if (!idMatch) return res.status(400).json({ error: "Invalid Google Sheets URL" });
+    const spreadsheetId = idMatch[1];
+
+    const fetchHeaders = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "text/csv,text/plain,*/*",
+    };
+
+    // Parse CSV (handle quoted fields with commas/newlines)
+    const parseCSV = (text) => {
+      const rows = [];
+      let row = [];
+      let inQuotes = false;
+      let field = "";
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (inQuotes) {
+          if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; }
+          else if (ch === '"') { inQuotes = false; }
+          else { field += ch; }
+        } else {
+          if (ch === '"') { inQuotes = true; }
+          else if (ch === ',') { row.push(field.trim()); field = ""; }
+          else if (ch === '\n' || (ch === '\r' && text[i + 1] === '\n')) {
+            row.push(field.trim()); field = "";
+            if (row.some(c => c !== "")) rows.push(row);
+            row = [];
+            if (ch === '\r') i++;
+          } else { field += ch; }
+        }
+      }
+      row.push(field.trim());
+      if (row.some(c => c !== "")) rows.push(row);
+      return rows;
+    };
+
+    // If gid is specified, fetch only that sheet
+    if (gid !== undefined && gid !== null) {
+      const csvUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${gid}`;
+      const response = await fetch(csvUrl, { redirect: "follow", headers: fetchHeaders });
+      if (!response.ok) {
+        return res.status(400).json({ error: `Не удалось загрузить лист (HTTP ${response.status}). Убедитесь, что таблица открыта по ссылке.` });
+      }
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("text/html")) {
+        return res.status(400).json({ error: "Таблица не доступна. Откройте доступ: Поделиться → Все у кого есть ссылка → Читатель" });
+      }
+      const csvText = await response.text();
+      const parsed = parseCSV(csvText);
+      if (parsed.length === 0) return res.status(400).json({ error: "Лист пуст" });
+      return res.json({ headers: parsed[0], rows: parsed.slice(1) });
+    }
+
+    // Otherwise, discover all sheets from the HTML page, then fetch each as CSV
+    const htmlUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
+    const htmlResp = await fetch(htmlUrl, { redirect: "follow", headers: { ...fetchHeaders, Accept: "text/html" } });
+    if (!htmlResp.ok) {
+      return res.status(400).json({ error: `Не удалось получить список листов (HTTP ${htmlResp.status})` });
+    }
+    const html = await htmlResp.text();
+
+    // Extract sheet names and gids from the HTML
+    // Google embeds sheet info in the page as a JS object
+    const sheets = [];
+    // Pattern 1: look for sheet tabs in HTML
+    const sheetRegex = /gid=(\d+)[^>]*>([^<]+)</g;
+    let m;
+    while ((m = sheetRegex.exec(html)) !== null) {
+      const sheetGid = m[1];
+      const sheetName = m[2].trim().replace(/&amp;/g, "&").replace(/&#39;/g, "'");
+      if (!sheets.find(s => s.gid === sheetGid)) {
+        sheets.push({ gid: sheetGid, name: sheetName });
+      }
+    }
+
+    // Pattern 2: look for sheet list definition in script tags
+    if (sheets.length === 0) {
+      const scriptMatch = html.match(/\{\\?"sheetId\\?":\s*(\d+).*?\\?"name\\?":\s*\\?"([^"\\]+)/g);
+      if (scriptMatch) {
+        for (const sm of scriptMatch) {
+          const idM = sm.match(/sheetId\\?":\s*(\d+)/);
+          const nameM = sm.match(/name\\?":\s*\\?"([^"\\]+)/);
+          if (idM && nameM && !sheets.find(s => s.gid === idM[1])) {
+            sheets.push({ gid: idM[1], name: nameM[1] });
+          }
+        }
+      }
+    }
+
+    // Fallback: just use gid=0
+    if (sheets.length === 0) sheets.push({ gid: "0", name: "Лист 1" });
+
+    // Fetch each sheet's CSV
+    const results = [];
+    for (const sheet of sheets) {
+      try {
+        const csvUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${sheet.gid}`;
+        const resp = await fetch(csvUrl, { redirect: "follow", headers: fetchHeaders });
+        if (!resp.ok) continue;
+        const ct = resp.headers.get("content-type") || "";
+        if (ct.includes("text/html")) continue;
+        const csv = await resp.text();
+        if (!csv.trim()) continue;
+        const parsed = parseCSV(csv);
+        if (parsed.length === 0) continue;
+        results.push({ gid: sheet.gid, name: sheet.name, headers: parsed[0], rows: parsed.slice(1) });
+      } catch { /* skip failed sheets */ }
+    }
+
+    if (results.length === 0) {
+      return res.status(400).json({ error: "Не удалось загрузить ни один лист. Проверьте доступ к таблице." });
+    }
+
+    res.json({ sheets: results });
+  } catch (error) {
+    console.error("Google Sheets import error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ====================== DYNAMIC TABLES ======================
 
 app.get("/api/dynamic-tables", (req, res) => {
@@ -3298,6 +3549,349 @@ app.get("/api/users/:id/permissions", (req, res) => {
       WHERE rp.role_id = ?
     `).all(user.role_id);
     res.json(perms.map(p => p.key));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ====================== TEACHER ANALYTICS ======================
+
+app.get("/api/analytics/teacher/:id", (req, res) => {
+  try {
+    const teacherId = parseInt(req.params.id);
+    const m = parseInt(req.query.months || 6);
+
+    // 1. Total lessons conducted (with at least 1 attendance record)
+    const lessonsCount = db.prepare(`
+      SELECT COUNT(DISTINCT l.id) as count
+      FROM lessons l
+      JOIN schedule sch ON l.schedule_id = sch.id
+      JOIN attendance a ON a.lesson_id = l.id
+      WHERE sch.teacher_id = ?
+        AND l.date >= date('now', '-' || ? || ' months')
+    `).get(teacherId, m);
+
+    // 2. Unique students taught
+    const studentsCount = db.prepare(`
+      SELECT COUNT(DISTINCT a.student_id) as count
+      FROM attendance a
+      JOIN lessons l ON a.lesson_id = l.id
+      JOIN schedule sch ON l.schedule_id = sch.id
+      WHERE sch.teacher_id = ?
+        AND l.date >= date('now', '-' || ? || ' months')
+    `).get(teacherId, m);
+
+    // 3. Attendance stats per subject
+    const bySubject = db.prepare(`
+      SELECT subj.name as subject_name, subj.id as subject_id,
+             COUNT(CASE WHEN a.status = 'present' THEN 1 END) as present,
+             COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
+             COUNT(CASE WHEN a.lateness = 'late' THEN 1 END) as late,
+             COUNT(a.id) as total
+      FROM schedule sch
+      JOIN lessons l ON l.schedule_id = sch.id
+      JOIN attendance a ON a.lesson_id = l.id
+      LEFT JOIN subjects subj ON sch.subject_id = subj.id
+      WHERE sch.teacher_id = ?
+        AND l.date >= date('now', '-' || ? || ' months')
+      GROUP BY subj.id
+      ORDER BY subj.name
+    `).all(teacherId, m);
+
+    // 4. Monthly trend
+    const monthlyTrend = db.prepare(`
+      SELECT strftime('%Y-%m', l.date) as month,
+             COUNT(CASE WHEN a.status = 'present' THEN 1 END) as present,
+             COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
+             COUNT(CASE WHEN a.lateness = 'late' THEN 1 END) as late,
+             COUNT(a.id) as total,
+             COUNT(DISTINCT l.id) as lessons
+      FROM schedule sch
+      JOIN lessons l ON l.schedule_id = sch.id
+      JOIN attendance a ON a.lesson_id = l.id
+      WHERE sch.teacher_id = ?
+        AND l.date >= date('now', '-' || ? || ' months')
+      GROUP BY strftime('%Y-%m', l.date)
+      ORDER BY month
+    `).all(teacherId, m);
+
+    // 5. Attendance per group
+    const byGroup = db.prepare(`
+      SELECT g.name as group_name, g.id as group_id,
+             COUNT(CASE WHEN a.status = 'present' THEN 1 END) as present,
+             COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
+             COUNT(a.id) as total
+      FROM schedule sch
+      JOIN lessons l ON l.schedule_id = sch.id
+      JOIN attendance a ON a.lesson_id = l.id
+      LEFT JOIN groups g ON sch.group_id = g.id
+      WHERE sch.teacher_id = ?
+        AND l.date >= date('now', '-' || ? || ' months')
+      GROUP BY g.id
+      ORDER BY g.name
+    `).all(teacherId, m);
+
+    // 6. ENT dynamics of students in groups this teacher teaches
+    const entDynamics = db.prepare(`
+      SELECT e.month, ROUND(AVG(e.score), 1) as avg_score,
+             COUNT(DISTINCT e.student_id) as students_count,
+             subj.name as subject_name
+      FROM ent_results e
+      JOIN students s ON e.student_id = s.id
+      JOIN subjects subj ON e.subject_id = subj.id
+      WHERE s.group_id IN (
+        SELECT DISTINCT sch.group_id FROM schedule sch
+        WHERE sch.teacher_id = ? AND sch.group_id IS NOT NULL
+      )
+      AND e.month >= strftime('%Y-%m', date('now', '-' || ? || ' months'))
+      GROUP BY e.month, subj.id
+      ORDER BY e.month, subj.name
+    `).all(teacherId, m);
+
+    // 7. Groups this teacher works with
+    const groups = db.prepare(`
+      SELECT DISTINCT g.id, g.name
+      FROM schedule sch
+      JOIN groups g ON sch.group_id = g.id
+      WHERE sch.teacher_id = ?
+      ORDER BY g.name
+    `).all(teacherId);
+
+    res.json({
+      lessonsCount: lessonsCount?.count || 0,
+      studentsCount: studentsCount?.count || 0,
+      bySubject,
+      monthlyTrend,
+      byGroup,
+      entDynamics,
+      groups,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ====================== EXPORT REPORTS ======================
+
+// Detailed monthly attendance per student per day
+app.get("/api/reports/attendance", (req, res) => {
+  try {
+    const { month, group_id, teacher_id } = req.query;
+    if (!month) return res.status(400).json({ error: "month required (YYYY-MM)" });
+
+    const conditions = ["strftime('%Y-%m', l.date) = ?"];
+    const params = [month];
+    if (group_id) { conditions.push("s.group_id = ?"); params.push(parseInt(group_id)); }
+    if (teacher_id) { conditions.push("sch.teacher_id = ?"); params.push(parseInt(teacher_id)); }
+
+    const rows = db.prepare(`
+      SELECT s.full_name as student_name, s.id as student_id,
+             g.name as group_name, subj.name as subject_name,
+             l.date, a.status, a.lateness, a.homework, a.comment,
+             u.name || ' ' || u.surname as teacher_name
+      FROM attendance a
+      JOIN lessons l ON a.lesson_id = l.id
+      JOIN schedule sch ON l.schedule_id = sch.id
+      JOIN students s ON a.student_id = s.id
+      LEFT JOIN groups g ON s.group_id = g.id
+      LEFT JOIN subjects subj ON sch.subject_id = subj.id
+      LEFT JOIN users u ON sch.teacher_id = u.id
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY g.name, s.full_name, l.date
+    `).all(...params);
+
+    // Summary stats
+    const summary = db.prepare(`
+      SELECT g.name as group_name,
+             COUNT(CASE WHEN a.status = 'present' THEN 1 END) as present,
+             COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
+             COUNT(CASE WHEN a.lateness = 'late' THEN 1 END) as late,
+             COUNT(a.id) as total
+      FROM attendance a
+      JOIN lessons l ON a.lesson_id = l.id
+      JOIN schedule sch ON l.schedule_id = sch.id
+      JOIN students s ON a.student_id = s.id
+      LEFT JOIN groups g ON s.group_id = g.id
+      WHERE ${conditions.join(" AND ")}
+      GROUP BY g.id
+      ORDER BY g.name
+    `).all(...params);
+
+    res.json({ rows, summary });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ENT dynamics report
+app.get("/api/reports/ent", (req, res) => {
+  try {
+    const { group_id, from_month, to_month } = req.query;
+
+    const conditions = [];
+    const params = [];
+    if (group_id) { conditions.push("s.group_id = ?"); params.push(parseInt(group_id)); }
+    if (from_month) { conditions.push("e.month >= ?"); params.push(from_month); }
+    if (to_month) { conditions.push("e.month <= ?"); params.push(to_month); }
+
+    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+
+    const rows = db.prepare(`
+      SELECT s.full_name as student_name, s.id as student_id,
+             g.name as group_name,
+             subj.name as subject_name,
+             e.score, e.month
+      FROM ent_results e
+      JOIN students s ON e.student_id = s.id
+      JOIN subjects subj ON e.subject_id = subj.id
+      LEFT JOIN groups g ON s.group_id = g.id
+      ${where}
+      ORDER BY g.name, s.full_name, subj.name, e.month
+    `).all(...params);
+
+    // Group averages by month
+    const groupAvg = db.prepare(`
+      SELECT g.name as group_name,
+             e.month,
+             ROUND(AVG(e.score), 1) as avg_score,
+             MIN(e.score) as min_score,
+             MAX(e.score) as max_score,
+             COUNT(DISTINCT e.student_id) as students_count
+      FROM ent_results e
+      JOIN students s ON e.student_id = s.id
+      LEFT JOIN groups g ON s.group_id = g.id
+      ${where}
+      GROUP BY g.id, e.month
+      ORDER BY g.name, e.month
+    `).all(...params);
+
+    res.json({ rows, groupAvg });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Group performance report (grades + attendance combined)
+app.get("/api/reports/group-performance", (req, res) => {
+  try {
+    const { group_id, months = 3 } = req.query;
+    if (!group_id) return res.status(400).json({ error: "group_id required" });
+    const m = parseInt(months);
+
+    // Students in group
+    const students = db.prepare(`
+      SELECT s.id, s.full_name FROM students s
+      WHERE s.group_id = ? AND s.status = 'active'
+      ORDER BY s.full_name
+    `).all(parseInt(group_id));
+
+    // Attendance stats per student
+    const attendanceByStudent = db.prepare(`
+      SELECT a.student_id,
+             COUNT(CASE WHEN a.status = 'present' THEN 1 END) as present,
+             COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
+             COUNT(CASE WHEN a.lateness = 'late' THEN 1 END) as late,
+             COUNT(a.id) as total
+      FROM attendance a
+      JOIN lessons l ON a.lesson_id = l.id
+      WHERE a.student_id IN (SELECT id FROM students WHERE group_id = ?)
+        AND l.date >= date('now', '-' || ? || ' months')
+      GROUP BY a.student_id
+    `).all(parseInt(group_id), m);
+
+    // Latest ENT scores per student
+    const entByStudent = db.prepare(`
+      SELECT e.student_id, subj.name as subject_name, e.score, e.month
+      FROM ent_results e
+      JOIN subjects subj ON e.subject_id = subj.id
+      WHERE e.student_id IN (SELECT id FROM students WHERE group_id = ?)
+      ORDER BY e.student_id, subj.name, e.month DESC
+    `).all(parseInt(group_id));
+
+    // Group info
+    const group = db.prepare(`
+      SELECT g.name, u.name || ' ' || u.surname as curator_name
+      FROM groups g LEFT JOIN users u ON g.curator_id = u.id
+      WHERE g.id = ?
+    `).get(parseInt(group_id));
+
+    res.json({ group, students, attendanceByStudent, entByStudent });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ====================== SCHEDULE SHARE LINKS ======================
+
+app.get("/api/share-links", (req, res) => {
+  try {
+    const links = db.prepare(`
+      SELECT sl.*, g.name as group_name, u.name || ' ' || u.surname as created_by_name
+      FROM schedule_share_links sl
+      LEFT JOIN groups g ON sl.group_id = g.id
+      LEFT JOIN users u ON sl.created_by = u.id
+      ORDER BY sl.created_at DESC
+    `).all();
+    res.json(links);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/share-links", (req, res) => {
+  try {
+    const { group_id, label, created_by, expires_at } = req.body;
+    if (!created_by) return res.status(400).json({ error: "created_by required" });
+    const token = crypto.randomBytes(16).toString("hex");
+    const result = db.prepare(
+      "INSERT INTO schedule_share_links (token, group_id, label, created_by, expires_at) VALUES (?, ?, ?, ?, ?)"
+    ).run(token, group_id || null, label || null, created_by, expires_at || null);
+    const link = db.prepare("SELECT * FROM schedule_share_links WHERE id = ?").get(result.lastInsertRowid);
+    res.json(link);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete("/api/share-links/:id", (req, res) => {
+  try {
+    db.prepare("DELETE FROM schedule_share_links WHERE id = ?").run(parseInt(req.params.id));
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ====================== PUBLIC SCHEDULE (no auth) ======================
+
+app.get("/api/public/schedule/:token", (req, res) => {
+  try {
+    const link = db.prepare("SELECT * FROM schedule_share_links WHERE token = ? AND is_active = 1").get(req.params.token);
+    if (!link) return res.status(404).json({ error: "Link not found or expired" });
+    if (link.expires_at && new Date(link.expires_at) < new Date()) {
+      return res.status(410).json({ error: "Link expired" });
+    }
+
+    let scheduleQuery = `
+      SELECT s.id, s.group_id, s.subject_id, s.teacher_id, s.room_id, s.time_slot_id, s.cycle,
+             s.custom_label,
+             g.name as group_name,
+             subj.name as subject_name,
+             u.name || ' ' || u.surname as teacher_name,
+             r.name as room_name,
+             ts.start_time, ts.end_time, ts.label as time_label
+      FROM schedule s
+      LEFT JOIN groups g ON s.group_id = g.id
+      LEFT JOIN subjects subj ON s.subject_id = subj.id
+      LEFT JOIN users u ON s.teacher_id = u.id
+      LEFT JOIN rooms r ON s.room_id = r.id
+      LEFT JOIN time_slots ts ON s.time_slot_id = ts.id
+    `;
+    const params = [];
+    if (link.group_id) {
+      scheduleQuery += " WHERE s.group_id = ?";
+      params.push(link.group_id);
+    }
+    scheduleQuery += " ORDER BY ts.start_time, g.name";
+    const schedule = db.prepare(scheduleQuery).all(...params);
+
+    const groups = link.group_id
+      ? db.prepare("SELECT id, name FROM groups WHERE id = ?").all(link.group_id)
+      : db.prepare("SELECT id, name FROM groups ORDER BY name").all();
+
+    const timeSlots = db.prepare("SELECT * FROM time_slots ORDER BY start_time").all();
+
+    res.json({
+      label: link.label,
+      group_id: link.group_id,
+      groups,
+      schedule,
+      timeSlots,
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

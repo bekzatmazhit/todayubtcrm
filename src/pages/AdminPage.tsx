@@ -975,17 +975,6 @@ export default function AdminPage() {
 
   return (
     <div className="space-y-4 md:space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 md:w-12 md:h-12 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center shadow-lg shrink-0">
-          <LayoutDashboard className="h-5 w-5 md:h-6 md:w-6 text-white" />
-        </div>
-        <div>
-          <h1 className="text-lg md:text-2xl font-heading font-bold text-foreground">Control Center</h1>
-          <p className="text-xs md:text-sm text-muted-foreground">Управление сотрудниками, учениками и данными центра</p>
-        </div>
-      </div>
-
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {statsLoading ? (

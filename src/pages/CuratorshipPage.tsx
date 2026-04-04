@@ -790,13 +790,6 @@ export default function CuratorshipPage() {
   if (isAdmin) {
     return (
       <div>
-        <div className="flex items-center gap-3 mb-4 md:mb-6">
-          <div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-            <Shield className="h-4 w-4 md:h-5 md:w-5 text-primary" />
-          </div>
-          <h1 className="text-lg md:text-2xl font-heading font-bold text-foreground">Кураторство</h1>
-        </div>
-
         {loading ? (
           <div className="space-y-2">{[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-12 rounded-lg" />)}</div>
         ) : (
@@ -1033,18 +1026,6 @@ export default function CuratorshipPage() {
   // ======== CURATOR / TEACHER VIEW ========
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4 md:mb-6">
-        <div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-          <Shield className="h-4 w-4 md:h-5 md:w-5 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-lg md:text-2xl font-heading font-bold text-foreground">Кураторство</h1>
-          {!loading && groups.length > 0 && (
-            <p className="text-sm text-muted-foreground">{groups.map((g) => g.name).join(" · ")}</p>
-          )}
-        </div>
-      </div>
-
       {selectedStudent && (
         <StudentDetailDialog student={selectedStudent} onClose={() => setSelectedStudent(null)} />
       )}

@@ -36,7 +36,7 @@ const MONTH_OPTIONS = [
 ];
 
 async function fetchStudent360(id: number) {
-  const token = localStorage.getItem("token");
+  const token = localStorage.getItem("today_crm_token");
   const res = await fetch(`${API_BASE}/student-360/${id}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
@@ -653,17 +653,6 @@ export default function StudentsPage() {
 
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-center gap-2 md:gap-3 mb-4 md:mb-6">
-        <div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-          <Users className="h-4 w-4 md:h-5 md:w-5 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-lg md:text-2xl font-heading font-bold text-foreground">Ученики</h1>
-          <p className="text-xs md:text-sm text-muted-foreground">{stats.total} учеников в {groups.length} группах</p>
-        </div>
-      </div>
-
       {/* Group pills */}
       <div className="flex flex-wrap gap-2 mb-4">
         {stats.groupCounts.map(g => (

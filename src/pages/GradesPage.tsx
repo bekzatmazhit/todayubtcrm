@@ -75,15 +75,7 @@ export default function GradesPage() {
   return (
     <div className="space-y-4 md:space-y-6 animate-in fade-in duration-300">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl md:text-3xl font-bold font-heading flex items-center gap-2 md:gap-3">
-            <ClipboardCheck className="h-7 w-7 md:h-8 md:w-8 text-primary" />
-            Контрольные тесты
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">Результаты контрольных и проверочных работ</p>
-        </div>
-      </div>
+
 
       {/* Stats cards */}
       <div className="grid grid-cols-3 gap-3">

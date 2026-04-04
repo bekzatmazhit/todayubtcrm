@@ -1,12 +1,12 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { loadLessons, saveLessons } from "@/lib/storage";
 import { Lesson } from "@/data/mockSchedule";
-import { fetchLessons, fetchTasks, fetchTimeSlots, updateTask, fetchNotes, createNote as createNoteAPI, deleteNoteById, fetchAdhocLessons, createAdhocLesson, deleteAdhocLesson, updateAdhocLessonAttendance, fetchStudents, fetchUsers, fetchSubjects, fetchMarkedLessons, fetchScheduleFillStatus, fetchAttendanceReconciliation } from "@/lib/api";
+import { fetchLessons, fetchTasks, fetchTimeSlots, updateTask, fetchNotes, createNote as createNoteAPI, deleteNoteById, fetchAdhocLessons, createAdhocLesson, deleteAdhocLesson, updateAdhocLessonAttendance, fetchStudents, fetchUsers, fetchSubjects, fetchMarkedLessons, fetchScheduleFillStatus, fetchAttendanceReconciliation, fetchShareLinks, createShareLink, deleteShareLink } from "@/lib/api";
 import { ClassManagementModal } from "@/components/ClassManagementModal";
 import ScheduleConstructor from "@/components/ScheduleConstructor";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { useAuth } from "@/contexts/AuthContext";
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, X, Settings2, PanelRightClose, PanelRightOpen, CheckCircle2, Circle, ListTodo, Download, Users as UsersIcon, ClipboardCheck, StickyNote } from "lucide-react";
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, X, Settings2, PanelRightClose, PanelRightOpen, CheckCircle2, Circle, ListTodo, Download, Users as UsersIcon, ClipboardCheck, StickyNote, Share2, Copy, Trash2, Link, ExternalLink } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -23,6 +23,7 @@ import { format, addDays, startOfWeek, addWeeks, subWeeks, subDays } from "date-
 import { ru as dateFnsRu, kk as dateFnsKk, enUS as dateFnsEn } from "date-fns/locale";
 import { useTranslation } from "react-i18next";
 import * as XLSX from "xlsx";
+import { addExcelWatermarkSheet, getPrintWatermarkStyles, getPrintWatermarkHtml } from "@/lib/watermark";
 
 const GROUP_COLORS = [
   "border-l-blue-500", "border-l-emerald-500", "border-l-violet-500",
@@ -107,6 +108,13 @@ export default function CalendarPage() {
   const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
   const [adhocGroupFilter, setAdhocGroupFilter] = useState<string>("all");
   const [adhocAttendanceModal, setAdhocAttendanceModal] = useState<any>(null);
+
+  // Share links
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [shareLinks, setShareLinks] = useState<any[]>([]);
+  const [shareGroupId, setShareGroupId] = useState<string>("all");
+  const [shareLabel, setShareLabel] = useState("");
+  const [shareLinksLoading, setShareLinksLoading] = useState(false);
 
   // Load lessons from API
   const loadCalendarData = useCallback(async () => {
@@ -451,6 +459,39 @@ export default function CalendarPage() {
     return format(currentDate, "MMMM yyyy", { locale: dateFnsLocale });
   }, [viewMode, currentDate, weekDays, dateFnsLocale]);
 
+  // ====================== SHARE LINKS ======================
+  const loadShareLinks = async () => {
+    setShareLinksLoading(true);
+    try { setShareLinks(await fetchShareLinks()); } catch { toast.error("Ошибка загрузки ссылок"); }
+    setShareLinksLoading(false);
+  };
+
+  const handleCreateShareLink = async () => {
+    if (!user) return;
+    try {
+      await createShareLink({
+        group_id: shareGroupId === "all" ? null : parseInt(shareGroupId),
+        label: shareLabel.trim() || undefined,
+        created_by: parseInt(user.id),
+      });
+      setShareLabel("");
+      setShareGroupId("all");
+      toast.success("Ссылка создана");
+      loadShareLinks();
+    } catch { toast.error("Ошибка создания ссылки"); }
+  };
+
+  const handleDeleteShareLink = async (id: number) => {
+    try { await deleteShareLink(id); toast.success("Ссылка удалена"); loadShareLinks(); }
+    catch { toast.error("Ошибка удаления"); }
+  };
+
+  const copyShareUrl = (token: string) => {
+    const url = `${window.location.origin}/public/schedule/${token}`;
+    navigator.clipboard.writeText(url);
+    toast.success("Ссылка скопирована");
+  };
+
   const exportSchedulePDF = () => {
     const cols = scheduleViewMode === "teachers" ? allTeachers : allGroups;
     const colLabel = scheduleViewMode === "teachers" ? "Преподаватель" : "Группа";
@@ -549,7 +590,9 @@ export default function CalendarPage() {
       });
     }
 
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Расписание TODAY</title><style>${pdfStyles}</style></head><body>
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Расписание TODAY</title><style>${pdfStyles}
+${getPrintWatermarkStyles()}</style></head><body>
+      ${getPrintWatermarkHtml()}
       ${bodyContent}
       <div class="footer">
         <div class="footer-left">Образовательный центр «TODAY»</div>
@@ -587,17 +630,8 @@ export default function CalendarPage() {
       <div className={`flex-1 min-w-0 transition-all duration-300 ${showTaskPanel ? 'pr-0' : ''}`}>
       {/* Header */}
       <div className="sticky top-0 z-20 bg-background/90 backdrop-blur-md border-b border-border pb-3 md:pb-4 mb-4 md:mb-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 md:gap-4">
-          <div className="flex items-center gap-2 md:gap-3">
-            <div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-              <CalendarIcon className="h-4 w-4 md:h-5 md:w-5 text-primary" />
-            </div>
-            <div>
-              <h1 className="text-lg md:text-2xl font-heading font-bold text-foreground">{t("Live Calendar")}</h1>
-              <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">{t("Click any class to manage attendance")}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-1 ml-auto">
+        <div className="flex items-center justify-end gap-3 md:gap-4">
+          <div className="flex items-center gap-1">
             <Button variant="outline" size="sm" className="h-7 md:h-8 text-xs" onClick={goToToday}>{t("Today")}</Button>
             <Button variant="outline" size="sm" className="h-7 md:h-8 text-xs" onClick={goToTomorrow}>{t("Tomorrow")}</Button>
             <div className="w-px h-5 bg-border mx-1" />
@@ -625,6 +659,14 @@ export default function CalendarPage() {
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Скачать PDF</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={() => { setShareDialogOpen(true); loadShareLinks(); }}>
+                    <Share2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Поделиться расписанием</TooltipContent>
               </Tooltip>
               {user?.role === "admin" && (
                 <>
@@ -1160,6 +1202,7 @@ export default function CalendarPage() {
           ws["!cols"] = [{ wch: 8 }, { wch: 28 }, { wch: 16 }, { wch: 20 }, ...reconDates.map(() => ({ wch: 6 })), { wch: 6 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 10 }];
           const wb = XLSX.utils.book_new();
           XLSX.utils.book_append_sheet(wb, ws, "Сверка");
+          addExcelWatermarkSheet(XLSX, wb);
           XLSX.writeFile(wb, `Сверка ${reconFrom} — ${reconTo}.xlsx`);
         };
 
@@ -1500,6 +1543,80 @@ export default function CalendarPage() {
       </>
       )}
       </>
+      {/* Share Schedule Dialog */}
+      <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Share2 className="h-5 w-5" />
+              Поделиться расписанием
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* Create new link */}
+            <div className="p-3 rounded-lg border bg-muted/30 space-y-3">
+              <p className="text-sm font-medium">Создать ссылку</p>
+              <div className="flex gap-2">
+                <Select value={shareGroupId} onValueChange={setShareGroupId}>
+                  <SelectTrigger className="flex-1 h-8 text-xs">
+                    <SelectValue placeholder="Все группы" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Все группы</SelectItem>
+                    {allGroups.map((g) => (
+                      <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input
+                  placeholder="Название (опц.)"
+                  value={shareLabel}
+                  onChange={(e) => setShareLabel(e.target.value)}
+                  className="flex-1 h-8 text-xs"
+                />
+              </div>
+              <Button size="sm" className="w-full h-8 text-xs" onClick={handleCreateShareLink}>
+                <Link className="h-3.5 w-3.5 mr-1.5" />
+                Создать ссылку
+              </Button>
+            </div>
+
+            {/* Existing links */}
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Активные ссылки</p>
+              {shareLinksLoading ? (
+                <p className="text-xs text-muted-foreground text-center py-4">Загрузка...</p>
+              ) : shareLinks.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-4">Нет созданных ссылок</p>
+              ) : (
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {shareLinks.map((link) => (
+                    <div key={link.id} className="flex items-center gap-2 p-2.5 rounded-lg border bg-card text-xs">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium truncate">
+                          {link.label || (link.group_name ? `Группа: ${link.group_name}` : "Все группы")}
+                        </p>
+                        <p className="text-muted-foreground text-[10px] mt-0.5">
+                          {link.group_name || "Все группы"} • {new Date(link.created_at).toLocaleDateString("ru-RU")}
+                        </p>
+                      </div>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => copyShareUrl(link.token)}>
+                        <Copy className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => window.open(`/public/schedule/${link.token}`, "_blank")}>
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive hover:text-destructive" onClick={() => handleDeleteShareLink(link.id)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       </div>
 
       {/* Task Panel Toggle Button (always visible) */}

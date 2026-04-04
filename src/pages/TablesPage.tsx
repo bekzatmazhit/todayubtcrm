@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import {
   fetchDynamicTables, createDynamicTable, updateDynamicTable, deleteDynamicTable,
   fetchDynamicTableRows, createDynamicTableRow, updateDynamicTableRow, deleteDynamicTableRow,
-  fetchStudents, fetchUsers, fetchGroups,
+  fetchStudents, fetchUsers, fetchGroups, importGoogleSheet,
 } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,17 +13,20 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { playSave } from "@/lib/sounds";
 import {
   Table2, Plus, Trash2, ArrowLeft, Settings2, EyeOff, Lock, Users as UsersIcon,
-  Pencil, Search, Download, Upload, Printer, Columns3, X,
+  Pencil, Search, Download, Upload, Printer, Columns3, X, Sheet,
   Type, Hash, CalendarDays, CheckSquare, Copy, ClipboardCopy, ArrowUpFromLine, ArrowDownFromLine,
   CopyPlus, Palette, GraduationCap, User, UsersRound,
-  Eye, ChevronUp, ChevronDown, ChevronsUpDown, SigmaSquare,
+  Eye, ChevronUp, ChevronDown, ChevronsUpDown, SigmaSquare, FileDown, FileText, FileSpreadsheet,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { Skeleton } from "@/components/ui/skeleton";
+import { addExcelWatermarkSheet, printWithWatermark, getPrintWatermarkStyles, getPrintWatermarkHtml } from "@/lib/watermark";
 
 interface DynamicColumn {
   key: string;
@@ -883,6 +886,13 @@ export default function TablesPage() {
   latestRows.current = rows;
   const [rowColors, setRowColors] = useState<Record<number, string>>({});
 
+  // Google Sheets import
+  const [gsImportOpen, setGsImportOpen] = useState(false);
+  const [gsUrl, setGsUrl] = useState("");
+  const [gsImporting, setGsImporting] = useState(false);
+  const [gsPreview, setGsPreview] = useState<{ sheets: { gid: string; name: string; headers: string[]; rows: string[][] }[] } | null>(null);
+  const [gsActiveSheet, setGsActiveSheet] = useState(0);
+
   const loadTables = useCallback(async () => {
     try { const data = await fetchDynamicTables(user ? parseInt(user.id) : undefined); setTables(data); }
     catch (e) { console.error("Error loading tables:", e); }
@@ -1124,6 +1134,7 @@ export default function TablesPage() {
     ws["!cols"] = cols.map((_, i) => ({ wch: Math.max(12, ...wsData.map(r => String(r[i] ?? "").length + 2)) }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, activeTable.title.slice(0, 31));
+    addExcelWatermarkSheet(XLSX, wb);
     XLSX.writeFile(wb, `${activeTable.title}.xlsx`);
     toast.success("Файл скачан");
   };
@@ -1144,7 +1155,6 @@ export default function TablesPage() {
   const handlePrint = () => {
     if (!activeTable) return;
     const cols = parseColumns(activeTable.columns_json);
-    const pw = window.open("", "_blank"); if (!pw) return;
     const tHtml = `<table style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:12px;">
       <thead><tr>${cols.map(c => `<th style="border:1px solid #ccc;padding:8px 12px;background:#f5f5f5;text-align:left;font-weight:600;">${c.label}</th>`).join("")}</tr></thead>
       <tbody>${rows.map((row, i) => `<tr style="background:${i % 2 ? "#fafafa" : "#fff"}">${cols.map(col => {
@@ -1153,11 +1163,91 @@ export default function TablesPage() {
         if (col.type === "date" && val) { try { d = new Date(String(val)).toLocaleDateString("ru-RU"); } catch {} }
         return `<td style="border:1px solid #ccc;padding:6px 12px;">${d}</td>`;
       }).join("")}</tr>`).join("")}</tbody></table>`;
-    pw.document.write(`<!DOCTYPE html><html><head><title>${activeTable.title}</title><style>@page{size:landscape;margin:1cm;}body{margin:20px;}</style></head><body>
-      <h2 style="font-family:Arial,sans-serif;margin-bottom:8px;">${activeTable.title}</h2>
-      <p style="font-family:Arial,sans-serif;font-size:11px;color:#666;margin-bottom:16px;">Автор: ${activeTable.creator_name} | Дата: ${new Date().toLocaleDateString("ru-RU")}</p>
-      ${tHtml}</body></html>`);
-    pw.document.close(); pw.print();
+    printWithWatermark(
+      activeTable.title,
+      `Автор: ${activeTable.creator_name} | Дата: ${new Date().toLocaleDateString("ru-RU")}`,
+      tHtml
+    );
+  };
+
+  /* ---- GOOGLE SHEETS IMPORT ---- */
+  const handleGsFetch = async () => {
+    if (!gsUrl.trim()) return;
+    setGsImporting(true);
+    try {
+      const data = await importGoogleSheet(gsUrl.trim());
+      if (data.sheets && data.sheets.length > 0) {
+        setGsPreview({ sheets: data.sheets });
+        setGsActiveSheet(0);
+      } else if (data.headers && data.rows) {
+        setGsPreview({ sheets: [{ gid: "0", name: "Лист 1", headers: data.headers, rows: data.rows }] });
+        setGsActiveSheet(0);
+      } else {
+        toast.error("Пустая таблица");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Ошибка импорта");
+    } finally { setGsImporting(false); }
+  };
+
+  const handleGsCreate = async () => {
+    if (!gsPreview || !user) return;
+    setGsImporting(true);
+    try {
+      let lastTable: any = null;
+      let totalImported = 0;
+
+      for (const sheet of gsPreview.sheets) {
+        if (!sheet.headers.length) continue;
+
+        const columns: DynamicColumn[] = sheet.headers.map((h, i) => {
+          const key = `col_${i + 1}`;
+          let type: DynamicColumn["type"] = "text";
+          if (sheet.rows.length > 0) {
+            const sample = sheet.rows[0][i];
+            if (sample && !isNaN(Number(sample)) && sample.trim() !== "") type = "number";
+            else if (sample && /^\d{4}-\d{2}-\d{2}/.test(sample)) type = "date";
+          }
+          return { key, label: h || `Колонка ${i + 1}`, type };
+        });
+
+        const title = gsPreview.sheets.length > 1
+          ? `${sheet.name} — ${new Date().toLocaleDateString("ru-RU")}`
+          : `Google Sheets — ${new Date().toLocaleDateString("ru-RU")}`;
+
+        const table = await createDynamicTable({
+          creator_id: parseInt(user.id), title, columns_json: columns, visibility: "private",
+        });
+
+        for (const row of sheet.rows) {
+          if (row.every(c => !c)) continue;
+          const rowData: Record<string, string | number> = {};
+          columns.forEach((col, idx) => {
+            const val = row[idx] ?? "";
+            if (col.type === "number") {
+              const num = Number(val);
+              rowData[col.key] = isNaN(num) ? val : num;
+            } else {
+              rowData[col.key] = val;
+            }
+          });
+          await createDynamicTableRow(table.id, rowData);
+          totalImported++;
+        }
+        lastTable = table;
+      }
+
+      toast.success(`Импортировано ${totalImported} строк из ${gsPreview.sheets.length} лист(ов)`);
+      setGsImportOpen(false); setGsUrl(""); setGsPreview(null); setGsActiveSheet(0);
+      await loadTables();
+      if (lastTable) {
+        const freshTables = await fetchDynamicTables(parseInt(user.id));
+        const created = freshTables.find((t: DynamicTable) => t.id === lastTable.id);
+        if (created) openTable(created);
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Ошибка создания таблицы");
+    } finally { setGsImporting(false); }
   };
 
   /* ---- UTILS ---- */
@@ -1221,26 +1311,51 @@ export default function TablesPage() {
             </div>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
+            <TooltipProvider delayDuration={300}>
             {editable && (
-              <Button variant="outline" size="sm" onClick={() => setAddColOpen(true)} className="gap-1.5 text-xs">
-                <Columns3 className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Колонка</span>
-              </Button>
+              <Tooltip><TooltipTrigger asChild>
+                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setAddColOpen(true)}>
+                  <Columns3 className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger><TooltipContent>Добавить колонку</TooltipContent></Tooltip>
             )}
             {editable && (
-              <Button variant="outline" size="sm" onClick={() => importFileRef.current?.click()} className="gap-1.5 text-xs">
-                <Upload className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Импорт</span>
-              </Button>
+              <Tooltip><TooltipTrigger asChild>
+                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => importFileRef.current?.click()}>
+                  <Upload className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger><TooltipContent>Импорт файла</TooltipContent></Tooltip>
             )}
             <input ref={importFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleImportFile} />
-            <Button variant="outline" size="sm" onClick={exportToExcel} className="gap-1.5 text-xs"><Download className="h-3.5 w-3.5" /> <span className="hidden md:inline">Excel</span></Button>
-            <Button variant="outline" size="sm" onClick={exportToCSV} className="gap-1.5 text-xs hidden sm:inline-flex"><Download className="h-3.5 w-3.5" /> CSV</Button>
-            <Button variant="outline" size="sm" onClick={handlePrint} className="gap-1.5 text-xs hidden sm:inline-flex"><Printer className="h-3.5 w-3.5" /> <span className="hidden md:inline">Печать</span></Button>
+            <DropdownMenu>
+              <Tooltip><TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="icon" className="h-8 w-8">
+                    <FileDown className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger><TooltipContent>Экспорт</TooltipContent></Tooltip>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={exportToExcel} className="gap-2"><FileSpreadsheet className="h-4 w-4" /> Excel (.xlsx)</DropdownMenuItem>
+                <DropdownMenuItem onClick={exportToCSV} className="gap-2"><FileText className="h-4 w-4" /> CSV</DropdownMenuItem>
+                <DropdownMenuItem onClick={handlePrint} className="gap-2"><Printer className="h-4 w-4" /> Печать</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             {isOwner && (
               <>
-                <Button variant="outline" size="sm" onClick={openSettings} className="gap-1.5 text-xs"><Settings2 className="h-3.5 w-3.5" /></Button>
-                <Button variant="destructive" size="sm" onClick={() => handleDeleteTable(activeTable.id)} className="gap-1.5 text-xs"><Trash2 className="h-3.5 w-3.5" /></Button>
+                <Tooltip><TooltipTrigger asChild>
+                  <Button variant="outline" size="icon" className="h-8 w-8" onClick={openSettings}>
+                    <Settings2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger><TooltipContent>Настройки</TooltipContent></Tooltip>
+                <Tooltip><TooltipTrigger asChild>
+                  <Button variant="destructive" size="icon" className="h-8 w-8" onClick={() => handleDeleteTable(activeTable.id)}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger><TooltipContent>Удалить таблицу</TooltipContent></Tooltip>
               </>
             )}
+            </TooltipProvider>
           </div>
         </div>
         {rowsLoading ? (
@@ -1302,15 +1417,13 @@ export default function TablesPage() {
   // ============= TABLE LIST VIEW (HUB) =============
   return (
     <div className="space-y-4 md:space-y-6 animate-in fade-in duration-300">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-lg md:text-2xl font-bold font-heading flex items-center gap-2 md:gap-3">
-            <div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0"><Table2 className="h-4 w-4 md:h-5 md:w-5 text-primary" /></div>
-            {t("Tables")}
-          </h1>
-          <p className="text-xs md:text-sm text-muted-foreground mt-1">Пользовательские таблицы преподавателей</p>
+      <div className="flex items-center justify-end flex-wrap gap-3">
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => { setGsImportOpen(true); setGsPreview(null); setGsUrl(""); }} className="gap-2">
+            <Sheet className="h-4 w-4" /> <span className="hidden sm:inline">Google Sheets</span>
+          </Button>
+          <Button onClick={() => setCreateOpen(true)} className="gap-2" size="sm"><Plus className="h-4 w-4" /> <span className="hidden sm:inline">Создать</span> таблицу</Button>
         </div>
-        <Button onClick={() => setCreateOpen(true)} className="gap-2" size="sm"><Plus className="h-4 w-4" /> <span className="hidden sm:inline">Создать</span> таблицу</Button>
       </div>
       <div className="relative max-w-full sm:max-w-md">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -1405,6 +1518,96 @@ export default function TablesPage() {
           <div className="flex justify-end gap-2 pt-3 border-t">
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Отмена</Button>
             <Button onClick={handleCreateTable} disabled={!newTitle.trim()}>Создать</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {/* Google Sheets Import Dialog */}
+      <Dialog open={gsImportOpen} onOpenChange={(v) => { setGsImportOpen(v); if (!v) { setGsPreview(null); setGsUrl(""); setGsActiveSheet(0); } }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Sheet className="h-5 w-5 text-green-600" /> Импорт из Google Sheets</DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+            <div>
+              <label className="text-sm font-medium">Ссылка на Google Таблицу</label>
+              <p className="text-xs text-muted-foreground mt-0.5 mb-2">Таблица должна быть открыта для просмотра по ссылке (Поделиться → Все у кого есть ссылка)</p>
+              <div className="flex gap-2">
+                <Input
+                  value={gsUrl}
+                  onChange={e => setGsUrl(e.target.value)}
+                  placeholder="https://docs.google.com/spreadsheets/d/..."
+                  className="flex-1"
+                  autoFocus
+                  onKeyDown={e => e.key === "Enter" && !gsImporting && handleGsFetch()}
+                />
+                <Button onClick={handleGsFetch} disabled={gsImporting || !gsUrl.trim()} size="sm">
+                  {gsImporting ? "Загрузка…" : "Загрузить"}
+                </Button>
+              </div>
+            </div>
+            {gsPreview && gsPreview.sheets.length > 0 && (() => {
+              const sheet = gsPreview.sheets[gsActiveSheet] || gsPreview.sheets[0];
+              return (
+                <div className="space-y-3 animate-in fade-in duration-200">
+                  {/* Sheet tabs */}
+                  {gsPreview.sheets.length > 1 && (
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {gsPreview.sheets.map((s, idx) => (
+                        <button
+                          key={s.gid}
+                          onClick={() => setGsActiveSheet(idx)}
+                          className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
+                            idx === gsActiveSheet
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-muted/50 hover:bg-muted border-transparent"
+                          }`}
+                        >
+                          {s.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary" className="text-xs">{sheet.headers.length} колонок</Badge>
+                    <Badge variant="secondary" className="text-xs">{sheet.rows.length} строк</Badge>
+                    {gsPreview.sheets.length > 1 && (
+                      <Badge variant="outline" className="text-xs">{gsPreview.sheets.length} листов — будут созданы отдельные таблицы</Badge>
+                    )}
+                  </div>
+                  <div className="rounded-lg border overflow-x-auto max-h-[300px] overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-muted">
+                        <tr>
+                          {sheet.headers.map((h, i) => (
+                            <th key={i} className="px-3 py-2 text-left font-semibold border-b whitespace-nowrap">{h || `Кол. ${i + 1}`}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sheet.rows.slice(0, 10).map((row, ri) => (
+                          <tr key={ri} className="border-b last:border-0 hover:bg-muted/30">
+                            {sheet.headers.map((_, ci) => (
+                              <td key={ci} className="px-3 py-1.5 whitespace-nowrap max-w-[200px] truncate">{row[ci] ?? ""}</td>
+                            ))}
+                          </tr>
+                        ))}
+                        {sheet.rows.length > 10 && (
+                          <tr><td colSpan={sheet.headers.length} className="px-3 py-2 text-center text-muted-foreground italic">
+                            …и ещё {sheet.rows.length - 10} строк
+                          </td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+          <div className="flex justify-end gap-2 pt-3 border-t">
+            <Button variant="outline" onClick={() => { setGsImportOpen(false); setGsPreview(null); setGsUrl(""); setGsActiveSheet(0); }}>Отмена</Button>
+            <Button onClick={handleGsCreate} disabled={!gsPreview || gsImporting}>
+              {gsImporting ? "Создание…" : gsPreview && gsPreview.sheets.length > 1 ? `Создать ${gsPreview.sheets.length} таблиц` : "Создать таблицу"}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

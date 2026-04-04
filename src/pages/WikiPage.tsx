@@ -478,7 +478,6 @@ export default function WikiPage() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <BookOpen className="h-5 w-5 text-primary" />
-            <h2 className="font-heading font-bold text-foreground">База знаний</h2>
           </div>
           {isAdmin && (
             <DropdownMenu>

@@ -22,6 +22,9 @@ import BroadcastPage from "@/pages/BroadcastPage";
 import ChatPage from "@/pages/ChatPage";
 import DashboardPage from "@/pages/DashboardPage";
 import DocsPage from "@/pages/DocsPage";
+import TeacherAnalyticsPage from "@/pages/TeacherAnalyticsPage";
+import ExportReportsPage from "@/pages/ExportReportsPage";
+import PublicSchedulePage from "@/pages/PublicSchedulePage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -63,7 +66,10 @@ const App = () => (
             <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
             <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute allowedRoles={["admin", "umo_head"]}><AdminPage /></ProtectedRoute>} />
+            <Route path="/analytics" element={<ProtectedRoute><TeacherAnalyticsPage /></ProtectedRoute>} />
+            <Route path="/reports" element={<ProtectedRoute allowedRoles={["admin", "umo_head"]}><ExportReportsPage /></ProtectedRoute>} />
             <Route path="/docs" element={<DocsPage />} />
+            <Route path="/public/schedule/:token" element={<PublicSchedulePage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

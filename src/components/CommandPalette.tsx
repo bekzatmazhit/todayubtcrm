@@ -7,6 +7,7 @@ import {
   Calendar, Users, BarChart3, Shield, ListTodo, FolderOpen,
   BookOpen, ClipboardCheck, Settings, LogOut,
   LayoutDashboard, UsersRound, Search, Command, ArrowRight,
+  Activity, FileSpreadsheet,
 } from "lucide-react";
 
 interface PaletteAction {
@@ -38,6 +39,7 @@ export function CommandPalette({ onLogout }: { onLogout: () => void }) {
       { id: "nav-wiki", label: "База знаний", category: "Навигация", icon: <BookOpen className="h-4 w-4" />, keywords: "база знаний wiki вики", action: () => navigate("/wiki") },
       { id: "nav-grades", label: "Оценки", category: "Навигация", icon: <ClipboardCheck className="h-4 w-4" />, keywords: "оценки grades", action: () => navigate("/grades") },
       { id: "nav-settings", label: "Настройки", category: "Навигация", icon: <Settings className="h-4 w-4" />, keywords: "настройки settings", action: () => navigate("/settings") },
+      { id: "nav-analytics", label: "Моя аналитика", category: "Навигация", icon: <Activity className="h-4 w-4" />, keywords: "аналитика учителя analytics teacher мои уроки посещаемость", action: () => navigate("/analytics") },
     ];
     if (user?.role === "admin" || user?.role === "umo_head") {
       nav.push(
@@ -49,6 +51,7 @@ export function CommandPalette({ onLogout }: { onLogout: () => void }) {
     const cmds: PaletteAction[] = [
       { id: "cmd-search-student", label: "Найти ученика...", category: "Действия", icon: <Search className="h-4 w-4" />, keywords: "поиск найти ученика search student", action: () => navigate("/students?focus=search") },
       { id: "cmd-new-task", label: "Создать новую Задачу", category: "Действия", icon: <ListTodo className="h-4 w-4" />, keywords: "создать задача new task создать задачу", action: () => navigate("/tasks?action=create") },
+      { id: "cmd-export-reports", label: "Экспорт отчётов в Excel", category: "Действия", icon: <FileSpreadsheet className="h-4 w-4" />, keywords: "экспорт отчёт excel report export посещаемость ент", action: () => navigate("/reports") },
       { id: "cmd-logout", label: "Выйти из аккаунта", category: "Система", icon: <LogOut className="h-4 w-4" />, keywords: "выйти logout exit выход", action: onLogout },
     ];
 

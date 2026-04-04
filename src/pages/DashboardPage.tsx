@@ -34,10 +34,6 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="p-6 space-y-6">
-        <div className="flex items-center gap-3">
-          <BarChart3 className="h-7 w-7 text-primary" />
-          <h1 className="text-2xl font-heading font-bold">Дашборд</h1>
-        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {[1,2,3,4].map(i => (
             <Card key={i} className="animate-pulse"><CardContent className="p-5 h-24" /></Card>
@@ -95,11 +91,7 @@ export default function DashboardPage() {
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <BarChart3 className="h-7 w-7 text-primary" />
-          <h1 className="text-2xl font-heading font-bold">Дашборд</h1>
-        </div>
+      <div className="flex items-center justify-end flex-wrap gap-3">
         <Select value={months} onValueChange={setMonths}>
           <SelectTrigger className="w-[180px]">
             <SelectValue />
