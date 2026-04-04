@@ -1,5 +1,4 @@
 import Database from "better-sqlite3";
-import bcrypt from "bcryptjs";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -519,31 +518,6 @@ export function initializeDatabase() {
       FOREIGN KEY(permission_id) REFERENCES permissions(id) ON DELETE CASCADE,
       UNIQUE(role_id, permission_id)
     );
-
-    CREATE TABLE IF NOT EXISTS schedule_share_links (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      token      TEXT UNIQUE NOT NULL,
-      group_id   INTEGER,
-      label      TEXT,
-      created_by INTEGER NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      expires_at TEXT,
-      is_active  INTEGER DEFAULT 1,
-      FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
-      FOREIGN KEY(created_by) REFERENCES users(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS student_certificates (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      student_id  INTEGER NOT NULL,
-      cert_type   TEXT NOT NULL,
-      file_url    TEXT NOT NULL,
-      original_name TEXT,
-      uploaded_by INTEGER,
-      uploaded_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
-      FOREIGN KEY(uploaded_by) REFERENCES users(id)
-    );
   `);
 
   // Seed permissions
@@ -572,12 +546,6 @@ export function initializeDatabase() {
   const permInsert = db.prepare("INSERT OR IGNORE INTO permissions (key, name, description) VALUES (?, ?, ?)");
   for (const [key, name, desc] of permList) permInsert.run(key, name, desc);
 
-  // Roles must exist before role_permissions seeding (FK: role_permissions.role_id -> roles.id)
-  const roleCheck = db.prepare("SELECT id FROM roles WHERE id = ?");
-  const roleInsert = db.prepare("INSERT INTO roles (id, name) VALUES (?, ?)");
-  [{ id: 1, name: "admin" }, { id: 2, name: "umo_head" }, { id: 3, name: "teacher" }]
-    .forEach(r => { if (!roleCheck.get(r.id)) roleInsert.run(r.id, r.name); });
-
   // Seed default role permissions (admin=all, umo_head=most, teacher=basic)
   const allPerms = db.prepare("SELECT id, key FROM permissions").all();
   const existingRP = db.prepare("SELECT COUNT(*) as c FROM role_permissions").get().c;
@@ -595,6 +563,12 @@ export function initializeDatabase() {
   }
 
   // === SEED STATIC DATA ===
+
+  // Roles
+  const roleCheck = db.prepare("SELECT id FROM roles WHERE id = ?");
+  const roleInsert = db.prepare("INSERT INTO roles (id, name) VALUES (?, ?)");
+  [{ id: 1, name: "admin" }, { id: 2, name: "umo_head" }, { id: 3, name: "teacher" }]
+    .forEach(r => { if (!roleCheck.get(r.id)) roleInsert.run(r.id, r.name); });
 
   // Profiles
   if (db.prepare("SELECT COUNT(*) as c FROM profiles").get().c === 0) {
@@ -661,9 +635,7 @@ function loadUsers(lines, idx) {
     try {
       const id = parseInt(c[idx("id")]);
       const surname = c[idx("surname")] || "Today";
-      const plainPwd = surname.toLowerCase() + id;
-      const hashedPwd = bcrypt.hashSync(plainPwd, 10);
-      stmt.run(id, c[idx("name")] || "User", surname, c[idx("phone")] || null, null, hashedPwd, parseInt(c[idx("role_id")]));
+      stmt.run(id, c[idx("name")] || "User", surname, c[idx("phone")] || null, null, surname.toLowerCase() + id, parseInt(c[idx("role_id")]));
       n++;
     } catch (e) { /* skip bad row */ }
   }
@@ -763,7 +735,7 @@ function generateEmails() {
 
 function printCredentials() {
   console.log("\n\ud83d\udd10 ===== LOGIN CREDENTIALS =====\n");
-  db.prepare("SELECT u.id, u.name, u.surname, u.email, r.name as role FROM users u JOIN roles r ON u.role_id = r.id ORDER BY u.id").all()
-    .forEach(u => { console.log("Email: " + u.email + "\nPassword: " + u.surname.toLowerCase() + u.id + "\n" + u.name + " " + u.surname + " (" + u.role + ")\n"); });
+  db.prepare("SELECT u.id, u.name, u.surname, u.email, u.password, r.name as role FROM users u JOIN roles r ON u.role_id = r.id ORDER BY u.id").all()
+    .forEach(u => { console.log("Email: " + u.email + "\nPassword: " + u.password + "\n" + u.name + " " + u.surname + " (" + u.role + ")\n"); });
   console.log("================================\n");
 }

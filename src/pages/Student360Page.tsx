@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
@@ -8,24 +8,14 @@ import {
   TrendingUp, TrendingDown, Calendar, BookOpen, Zap, Users,
   Award, Clock, Loader2, ShieldAlert, CheckCircle2, XCircle,
   BookMarked, BookX, Activity, Star, Minus, ArrowLeft, ClipboardList,
-  FileText, Upload, Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import i18n from "@/lib/i18n";
-import {
-  fetchStudentCertificates,
-  uploadStudentCertificate,
-  deleteStudentCertificate,
-  type StudentCertificate,
-  type StudentCertificateType,
-} from "@/lib/api";
-import { toast } from "sonner";
 import {
   AreaChart, Area, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -37,9 +27,9 @@ import GradesTab360 from "./student-profile/GradesTab360";
    DATA FETCH
    ═══════════════════════════════════════════════════════════════════════════ */
 const fetchStudent360 = async (id: string) => {
-  const token = localStorage.getItem("today_crm_token");
+  const token = localStorage.getItem("token");
   const res = await fetch(`/api/student-360/${id}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error("Failed");
   return res.json();
@@ -856,193 +846,10 @@ function CommunicationTab({ s }: { s: any }) {
   );
 }
 
-const CERTIFICATE_SLOTS: { type: StudentCertificateType; label: string }[] = [
-  { type: "january", label: "Январьский сертификат" },
-  { type: "march", label: "Мартовский сертификат" },
-  { type: "grant1", label: "Грант 1" },
-  { type: "grant2", label: "Грант 2" },
-];
-
-function CertificatesTab({ studentId }: { studentId: string | number }) {
-  const [loading, setLoading] = useState(true);
-  const [busyType, setBusyType] = useState<StudentCertificateType | null>(null);
-  const [certs, setCerts] = useState<Partial<Record<StudentCertificateType, StudentCertificate>>>({});
-  const [selectedFiles, setSelectedFiles] = useState<Partial<Record<StudentCertificateType, File>>>({});
-  const [inputKeys, setInputKeys] = useState<Record<StudentCertificateType, number>>({
-    january: 0,
-    march: 0,
-    grant1: 0,
-    grant2: 0,
-  });
-
-  async function loadCertificates() {
-    try {
-      setLoading(true);
-      const rows = await fetchStudentCertificates(studentId);
-      const mapped: Partial<Record<StudentCertificateType, StudentCertificate>> = {};
-      for (const row of rows) {
-        mapped[row.cert_type] = row;
-      }
-      setCerts(mapped);
-    } catch (e) {
-      console.error(e);
-      toast.error("Не удалось загрузить сертификаты");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    loadCertificates();
-  }, [studentId]);
-
-  function onFilePick(type: StudentCertificateType, file: File | null) {
-    setSelectedFiles((prev) => {
-      const next = { ...prev };
-      if (file) next[type] = file;
-      else delete next[type];
-      return next;
-    });
-  }
-
-  async function handleUpload(type: StudentCertificateType) {
-    const file = selectedFiles[type];
-    if (!file) {
-      toast.error("Выберите PDF файл");
-      return;
-    }
-    if (!file.name.toLowerCase().endsWith(".pdf")) {
-      toast.error("Только PDF файлы");
-      return;
-    }
-
-    try {
-      setBusyType(type);
-      const created = await uploadStudentCertificate(studentId, type, file);
-      setCerts((prev) => ({ ...prev, [type]: created }));
-      setSelectedFiles((prev) => {
-        const next = { ...prev };
-        delete next[type];
-        return next;
-      });
-      setInputKeys((prev) => ({ ...prev, [type]: prev[type] + 1 }));
-      toast.success("Сертификат загружен");
-    } catch (e) {
-      console.error(e);
-      toast.error("Ошибка загрузки сертификата");
-    } finally {
-      setBusyType(null);
-    }
-  }
-
-  async function handleDelete(type: StudentCertificateType) {
-    const cert = certs[type];
-    if (!cert) return;
-
-    try {
-      setBusyType(type);
-      await deleteStudentCertificate(studentId, cert.id);
-      setCerts((prev) => {
-        const next = { ...prev };
-        delete next[type];
-        return next;
-      });
-      toast.success("Сертификат удалён");
-    } catch (e) {
-      console.error(e);
-      toast.error("Ошибка удаления сертификата");
-    } finally {
-      setBusyType(null);
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-semibold flex items-center gap-2">
-            <FileText className="h-4 w-4 text-muted-foreground" /> Сертификаты 360
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-xs text-muted-foreground">
-            Загрузка сертификатов: январьский, мартовский, грант 1 и грант 2. Файлы принимаются только в PDF.
-          </p>
-        </CardContent>
-      </Card>
-
-      {loading ? (
-        <div className="grid gap-4 md:grid-cols-2">
-          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-44 rounded-xl" />)}
-        </div>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2">
-          {CERTIFICATE_SLOTS.map((slot) => {
-            const cert = certs[slot.type];
-            const selected = selectedFiles[slot.type];
-            const isBusy = busyType === slot.type;
-            return (
-              <Card key={slot.type}>
-                <CardHeader className="pb-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <CardTitle className="text-sm font-semibold">{slot.label}</CardTitle>
-                    <Badge variant={cert ? "secondary" : "outline"} className="text-[10px] shrink-0">
-                      {cert ? "Загружен" : "Пусто"}
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {cert ? (
-                    <a
-                      href={cert.file_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-xs text-primary hover:underline break-all"
-                    >
-                      {cert.original_name || "Открыть PDF"}
-                    </a>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">Файл ещё не загружен</p>
-                  )}
-
-                  <Input
-                    key={inputKeys[slot.type]}
-                    type="file"
-                    accept="application/pdf,.pdf"
-                    onChange={(e) => onFilePick(slot.type, e.target.files?.[0] || null)}
-                  />
-
-                  {selected && (
-                    <p className="text-[11px] text-muted-foreground truncate" title={selected.name}>
-                      Выбран: {selected.name}
-                    </p>
-                  )}
-
-                  <div className="flex gap-2">
-                    <Button size="sm" className="gap-1.5" onClick={() => handleUpload(slot.type)} disabled={!selected || isBusy}>
-                      <Upload className="h-3.5 w-3.5" />
-                      {isBusy ? "Загрузка..." : "Загрузить"}
-                    </Button>
-                    {cert && (
-                      <Button size="sm" variant="outline" className="gap-1.5" onClick={() => handleDelete(slot.type)} disabled={isBusy}>
-                        <Trash2 className="h-3.5 w-3.5" /> Удалить
-                      </Button>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════
    MAIN PAGE
    ═══════════════════════════════════════════════════════════════════════════ */
-type TabKey = "overview" | "attendance" | "ent" | "quizzes" | "communication" | "certificates";
+type TabKey = "overview" | "attendance" | "ent" | "quizzes" | "communication";
 
 export default function Student360Page() {
   const { id } = useParams<{ id: string }>();
@@ -1135,7 +942,6 @@ export default function Student360Page() {
     { key: "ent",           label: "ЕНТ" },
     { key: "quizzes",       label: "Контрольные" },
     { key: "communication", label: "Связь" },
-    { key: "certificates",  label: "Сертификаты" },
   ];
 
   return (
@@ -1282,7 +1088,6 @@ export default function Student360Page() {
         {tab === "ent"           && <GradesTab360 data={s} />}
         {tab === "quizzes"       && <QuizzesTab s={s} />}
         {tab === "communication" && <CommunicationTab s={s} />}
-        {tab === "certificates"  && <CertificatesTab studentId={s.id} />}
       </div>
     </div>
   );

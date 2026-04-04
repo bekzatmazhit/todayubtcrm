@@ -3,18 +3,12 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import multer from "multer";
-import crypto from "crypto";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import sharp from "sharp";
 import { WebSocketServer } from "ws";
 import { initializeDatabase, db } from "./db.js";
-
-const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString("hex");
-const JWT_EXPIRES_IN = "7d";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsDir = path.join(__dirname, "uploads");
@@ -80,30 +74,6 @@ app.use(globalLimiter);
 
 initializeDatabase();
 
-// ====================== JWT AUTH MIDDLEWARE ======================
-
-function authenticateToken(req, res, next) {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "Требуется авторизация" });
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    req.user = payload;
-    next();
-  } catch {
-    return res.status(401).json({ error: "Недействительный токен" });
-  }
-}
-
-// Apply auth to all /api/* except public endpoints and login
-app.use("/api", (req, res, next) => {
-  // Public routes that don't require auth
-  const publicPaths = ["/login", "/password-reset-request"];
-  if (publicPaths.includes(req.path)) return next();
-  if (req.path.startsWith("/public/")) return next();
-  authenticateToken(req, res, next);
-});
-
 // ====================== HELPERS ======================
 
 function logAction(req, { action, entityType, entityId, entityName, details, userId, userName } = {}) {
@@ -153,12 +123,10 @@ app.post("/api/login", loginLimiter, (req, res) => {
       FROM users u JOIN roles r ON u.role_id = r.id WHERE u.email = ?
     `).get(email);
 
-    if (!user || !bcrypt.compareSync(password, user.password)) return res.status(401).json({ error: "Invalid email or password" });
-
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    if (!user || user.password !== password) return res.status(401).json({ error: "Invalid email or password" });
 
     logAction(req, { action: "login", entityType: "user", entityId: user.id, entityName: user.name + " " + user.surname, userId: user.id, userName: user.name + " " + user.surname });
-    res.json({ id: user.id.toString(), email: user.email, full_name: user.name + " " + user.surname, role: user.role, avatar_url: user.avatar_url || null, token });
+    res.json({ id: user.id.toString(), email: user.email, full_name: user.name + " " + user.surname, role: user.role, avatar_url: user.avatar_url || null });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -971,95 +939,6 @@ app.delete("/api/students/:id", (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// ====================== STUDENT CERTIFICATES ======================
-
-const CERTIFICATE_TYPES = new Set(["march", "january", "grant1", "grant2"]);
-const certificateUpload = multer({
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const ext = path.extname(file.originalname || "").toLowerCase();
-    if (ext !== ".pdf") return cb(new Error("Only PDF files are allowed"));
-    cb(null, true);
-  },
-});
-
-app.get("/api/students/:id/certificates", (req, res) => {
-  try {
-    const rows = db.prepare(`
-      SELECT id, student_id, cert_type, file_url, original_name, uploaded_by, uploaded_at
-      FROM student_certificates
-      WHERE student_id = ?
-      ORDER BY uploaded_at DESC
-    `).all(req.params.id);
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/students/:id/certificates", certificateUpload.single("file"), (req, res) => {
-  try {
-    const studentId = Number(req.params.id);
-    const certType = String(req.body.cert_type || "").trim();
-
-    if (!studentId) return res.status(400).json({ error: "Invalid student id" });
-    if (!CERTIFICATE_TYPES.has(certType)) {
-      return res.status(400).json({ error: "cert_type must be one of: march, january, grant1, grant2" });
-    }
-    if (!req.file) return res.status(400).json({ error: "PDF file is required" });
-
-    const fileUrl = `/uploads/${req.file.filename}`;
-    const uploadedBy = req.user?.id ? Number(req.user.id) : null;
-
-    const existing = db.prepare("SELECT file_url FROM student_certificates WHERE student_id = ? AND cert_type = ?").get(studentId, certType);
-    db.prepare("DELETE FROM student_certificates WHERE student_id = ? AND cert_type = ?").run(studentId, certType);
-    if (existing?.file_url) {
-      try {
-        const oldFilePath = path.join(uploadsDir, path.basename(existing.file_url));
-        if (fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
-      } catch (_) {
-        // Ignore old file deletion errors.
-      }
-    }
-
-    const result = db.prepare(`
-      INSERT INTO student_certificates (student_id, cert_type, file_url, original_name, uploaded_by)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(studentId, certType, fileUrl, req.file.originalname || null, uploadedBy);
-
-    const created = db.prepare(`
-      SELECT id, student_id, cert_type, file_url, original_name, uploaded_by, uploaded_at
-      FROM student_certificates
-      WHERE id = ?
-    `).get(result.lastInsertRowid);
-
-    res.json(created);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete("/api/students/:id/certificates/:certId", (req, res) => {
-  try {
-    const cert = db.prepare("SELECT * FROM student_certificates WHERE id = ? AND student_id = ?").get(req.params.certId, req.params.id);
-    if (!cert) return res.status(404).json({ error: "Certificate not found" });
-
-    db.prepare("DELETE FROM student_certificates WHERE id = ?").run(req.params.certId);
-
-    try {
-      const filePath = path.join(uploadsDir, path.basename(cert.file_url || ""));
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    } catch (_) {
-      // Ignore file deletion errors to not fail API deletion.
-    }
-
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // ====================== ATTENDANCE ======================
 
 // Fetch attendance for an existing lesson.
@@ -1854,11 +1733,10 @@ app.post("/api/users", (req, res) => {
     if (!name || !surname) return res.status(400).json({ error: "name and surname required" });
     const roleMap = { admin: 1, umo_head: 2, teacher: 3 };
     const role_id = roleMap[role] ?? 3;
-    const plainPwd = password || surname.toLowerCase() + Date.now();
-    const hashedPwd = bcrypt.hashSync(plainPwd, 10);
+    const pwd = password || surname.toLowerCase() + Date.now();
     const result = db.prepare(
       "INSERT INTO users (name, surname, phone, email, password, role_id) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run(name, surname, phone || null, email || null, hashedPwd, role_id);
+    ).run(name, surname, phone || null, email || null, pwd, role_id);
     logAction(req, { action: "create", entityType: "user", entityId: result.lastInsertRowid, entityName: name + " " + surname, details: JSON.stringify({ role, email }) });
     res.json({ id: result.lastInsertRowid, success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1875,11 +1753,10 @@ app.put("/api/users/:id", (req, res) => {
     if (password) {
       const user = db.prepare("SELECT password FROM users WHERE id = ?").get(req.params.id);
       if (!user) return res.status(404).json({ error: "User not found" });
-      if (current_password && !bcrypt.compareSync(current_password, user.password)) {
+      if (current_password && user.password !== current_password) {
         return res.status(400).json({ error: "Текущий пароль неверный" });
       }
-      const hashedPwd = bcrypt.hashSync(password, 10);
-      db.prepare("UPDATE users SET password = ? WHERE id = ?").run(hashedPwd, req.params.id);
+      db.prepare("UPDATE users SET password = ? WHERE id = ?").run(password, req.params.id);
     }
 
     db.prepare(`
@@ -3808,90 +3685,6 @@ app.get("/api/reports/group-performance", (req, res) => {
     `).get(parseInt(group_id));
 
     res.json({ group, students, attendanceByStudent, entByStudent });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// ====================== SCHEDULE SHARE LINKS ======================
-
-app.get("/api/share-links", (req, res) => {
-  try {
-    const links = db.prepare(`
-      SELECT sl.*, g.name as group_name, u.name || ' ' || u.surname as created_by_name
-      FROM schedule_share_links sl
-      LEFT JOIN groups g ON sl.group_id = g.id
-      LEFT JOIN users u ON sl.created_by = u.id
-      ORDER BY sl.created_at DESC
-    `).all();
-    res.json(links);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post("/api/share-links", (req, res) => {
-  try {
-    const { group_id, label, created_by, expires_at } = req.body;
-    if (!created_by) return res.status(400).json({ error: "created_by required" });
-    const token = crypto.randomBytes(16).toString("hex");
-    const result = db.prepare(
-      "INSERT INTO schedule_share_links (token, group_id, label, created_by, expires_at) VALUES (?, ?, ?, ?, ?)"
-    ).run(token, group_id || null, label || null, created_by, expires_at || null);
-    const link = db.prepare("SELECT * FROM schedule_share_links WHERE id = ?").get(result.lastInsertRowid);
-    res.json(link);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.delete("/api/share-links/:id", (req, res) => {
-  try {
-    db.prepare("DELETE FROM schedule_share_links WHERE id = ?").run(parseInt(req.params.id));
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// ====================== PUBLIC SCHEDULE (no auth) ======================
-
-app.get("/api/public/schedule/:token", (req, res) => {
-  try {
-    const link = db.prepare("SELECT * FROM schedule_share_links WHERE token = ? AND is_active = 1").get(req.params.token);
-    if (!link) return res.status(404).json({ error: "Link not found or expired" });
-    if (link.expires_at && new Date(link.expires_at) < new Date()) {
-      return res.status(410).json({ error: "Link expired" });
-    }
-
-    let scheduleQuery = `
-      SELECT s.id, s.group_id, s.subject_id, s.teacher_id, s.room_id, s.time_slot_id, s.cycle,
-             s.custom_label,
-             g.name as group_name,
-             subj.name as subject_name,
-             u.name || ' ' || u.surname as teacher_name,
-             r.name as room_name,
-             ts.start_time, ts.end_time, ts.label as time_label
-      FROM schedule s
-      LEFT JOIN groups g ON s.group_id = g.id
-      LEFT JOIN subjects subj ON s.subject_id = subj.id
-      LEFT JOIN users u ON s.teacher_id = u.id
-      LEFT JOIN rooms r ON s.room_id = r.id
-      LEFT JOIN time_slots ts ON s.time_slot_id = ts.id
-    `;
-    const params = [];
-    if (link.group_id) {
-      scheduleQuery += " WHERE s.group_id = ?";
-      params.push(link.group_id);
-    }
-    scheduleQuery += " ORDER BY ts.start_time, g.name";
-    const schedule = db.prepare(scheduleQuery).all(...params);
-
-    const groups = link.group_id
-      ? db.prepare("SELECT id, name FROM groups WHERE id = ?").all(link.group_id)
-      : db.prepare("SELECT id, name FROM groups ORDER BY name").all();
-
-    const timeSlots = db.prepare("SELECT * FROM time_slots ORDER BY start_time").all();
-
-    res.json({
-      label: link.label,
-      group_id: link.group_id,
-      groups,
-      schedule,
-      timeSlots,
-    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

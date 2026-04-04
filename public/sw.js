@@ -1,4 +1,4 @@
-const CACHE_NAME = 'today-crm-v3';
+const CACHE_NAME = 'today-crm-v4';
 const STATIC_ASSETS = [
   '/',
   '/favicon.svg',
@@ -57,6 +57,9 @@ self.addEventListener('fetch', (event) => {
 
   // API calls — network only
   if (request.url.includes('/api/')) return;
+
+  // Dev assets — network only (never cache Vite internals)
+  if (request.url.includes('/node_modules/') || request.url.includes('/@') || request.url.includes('/src/')) return;
 
   // Navigation requests — network first, offline fallback
   if (request.mode === 'navigate') {

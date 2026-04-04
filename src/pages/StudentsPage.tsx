@@ -36,7 +36,7 @@ const MONTH_OPTIONS = [
 ];
 
 async function fetchStudent360(id: number) {
-  const token = localStorage.getItem("today_crm_token");
+  const token = localStorage.getItem("token");
   const res = await fetch(`${API_BASE}/student-360/${id}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });

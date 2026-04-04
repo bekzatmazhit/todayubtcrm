@@ -24,7 +24,6 @@ import DashboardPage from "@/pages/DashboardPage";
 import DocsPage from "@/pages/DocsPage";
 import TeacherAnalyticsPage from "@/pages/TeacherAnalyticsPage";
 import ExportReportsPage from "@/pages/ExportReportsPage";
-import PublicSchedulePage from "@/pages/PublicSchedulePage";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -69,7 +68,6 @@ const App = () => (
             <Route path="/analytics" element={<ProtectedRoute><TeacherAnalyticsPage /></ProtectedRoute>} />
             <Route path="/reports" element={<ProtectedRoute allowedRoles={["admin", "umo_head"]}><ExportReportsPage /></ProtectedRoute>} />
             <Route path="/docs" element={<DocsPage />} />
-            <Route path="/public/schedule/:token" element={<PublicSchedulePage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
