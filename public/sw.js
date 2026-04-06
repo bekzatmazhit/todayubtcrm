@@ -1,5 +1,5 @@
-const CACHE_NAME = 'today-crm-v4';
-const API_CACHE_NAME = 'today-api-v1';
+const CACHE_NAME = 'today-crm-v5';
+const API_CACHE_NAME = 'today-api-v2';
 const API_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 // API routes to cache for offline schedule access
 const API_CACHEABLE = ['/api/lessons', '/api/time-slots', '/api/groups', '/api/subjects', '/api/users'];
@@ -96,6 +96,28 @@ self.addEventListener('fetch', (event) => {
   // Dev assets — network only (never cache Vite internals)
   if (request.url.includes('/node_modules/') || request.url.includes('/@') || request.url.includes('/src/')) return;
 
+  // Hashed assets (/assets/...) — network first, cache fallback
+  // These files have content hashes in their names so cache busting is built-in.
+  // We must always try the network first to avoid serving stale chunks after a deploy.
+  if (request.url.includes('/assets/')) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(async () => {
+          const cached = await caches.match(request);
+          if (cached) return cached;
+          return new Response('// offline', { status: 503, headers: { 'Content-Type': 'application/javascript' } });
+        })
+    );
+    return;
+  }
+
   // Navigation requests — network first, offline fallback
   if (request.mode === 'navigate') {
     event.respondWith(
@@ -127,7 +149,10 @@ self.addEventListener('fetch', (event) => {
           }
           return response;
         })
-        .catch(() => cached);
+        .catch(() => {
+          if (cached) return cached;
+          return new Response('', { status: 503 });
+        });
       return cached || fetchPromise;
     })
   );
