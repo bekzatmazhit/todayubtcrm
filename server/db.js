@@ -654,6 +654,26 @@ export function initializeDatabase() {
     console.log("✅ Default role permissions seeded");
   }
 
+  // === LOAD seed.sql IF PRESENT (production data seeding) ===
+  const seedPath = path.join(__dirname, "seed.sql");
+  if (fs.existsSync(seedPath)) {
+    const alreadySeeded = db.prepare("SELECT COUNT(*) as c FROM users").get().c > 0;
+    if (!alreadySeeded) {
+      try {
+        const seedSQL = fs.readFileSync(seedPath, "utf-8");
+        db.exec(seedSQL);
+        console.log("✅ seed.sql loaded successfully");
+        console.log("✅ Database initialized");
+        printCredentials();
+        return; // skip CSV seeding below since seed.sql covers everything
+      } catch (e) {
+        console.error("⚠️ seed.sql failed:", e.message);
+      }
+    } else {
+      console.log("ℹ️  seed.sql skipped — database already has data");
+    }
+  }
+
   // === SEED STATIC DATA ===
 
   // Roles
