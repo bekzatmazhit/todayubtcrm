@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -47,6 +47,7 @@ export default function Login() {
   const [showLastLogin, setShowLastLogin] = useState(true);
   const [showForgot, setShowForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
+  const passwordRef = useRef<HTMLInputElement>(null);
   const [forgotLoading, setForgotLoading] = useState(false);
   const [bgPickerOpen, setBgPickerOpen] = useState(false);
   const [bgImage, setBgImage] = useState<string | null>(() => localStorage.getItem("login_bg_image"));
@@ -59,6 +60,8 @@ export default function Login() {
         const data = JSON.parse(saved) as LastLogin;
         setLastLogin(data);
         setEmail(data.email);
+        // Auto-focus password when last login is detected
+        setTimeout(() => passwordRef.current?.focus(), 150);
       }
     } catch { /* ignore */ }
   }, []);
@@ -214,7 +217,7 @@ export default function Login() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="name.surname@today.edu"
                 disabled={loading}
-                className="h-11 bg-background/50"
+                className="h-12 bg-background/50 text-base"
                 autoComplete="email"
               />
             </div>
@@ -231,7 +234,8 @@ export default function Login() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
                   disabled={loading}
-                  className="h-11 bg-background/50 pr-10"
+                  ref={passwordRef}
+                  className="h-12 bg-background/50 pr-10 text-base"
                   autoComplete="current-password"
                 />
                 <button
@@ -247,7 +251,7 @@ export default function Login() {
 
             <Button
               type="submit"
-              className="w-full h-11 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
+              className="w-full h-12 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
               disabled={loading || !email || !password}
             >
               {loading ? (

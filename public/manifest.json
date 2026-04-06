@@ -2,9 +2,10 @@
   "name": "TODAY CRM",
   "short_name": "TODAY",
   "description": "TODAY — система управления образовательным центром",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
   "background_color": "#ffffff",
   "theme_color": "#6366f1",
   "orientation": "any",
@@ -12,22 +13,25 @@
   "lang": "ru",
   "dir": "ltr",
   "id": "/",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/favicon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "/icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
       "src": "/icons/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
       "src": "/icons/icon-512.png",
@@ -38,21 +42,31 @@
   ],
   "shortcuts": [
     {
-      "name": "Расписание",
+      "name": "Расписание сегодня",
       "short_name": "Расписание",
-      "url": "/",
+      "description": "Открыть расписание на сегодня",
+      "url": "/?source=pwa",
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     },
     {
       "name": "Ученики",
       "short_name": "Ученики",
-      "url": "/students",
+      "description": "Список учеников",
+      "url": "/students?source=pwa",
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     },
     {
       "name": "Задачи",
       "short_name": "Задачи",
-      "url": "/tasks",
+      "description": "Мои задачи",
+      "url": "/tasks?source=pwa",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Чат",
+      "short_name": "Чат",
+      "description": "Мессенджер",
+      "url": "/chat?source=pwa",
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     }
   ]

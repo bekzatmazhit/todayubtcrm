@@ -501,6 +501,98 @@ export function initializeDatabase() {
     );
   `);
 
+  // ENT Certificates (real exam result files per student)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ent_certificates (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id   INTEGER NOT NULL,
+      exam_type    TEXT NOT NULL,
+      filename     TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      file_path    TEXT NOT NULL,
+      file_size    INTEGER,
+      uploaded_by  INTEGER,
+      uploaded_at  TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY(student_id)  REFERENCES students(id) ON DELETE CASCADE,
+      FOREIGN KEY(uploaded_by) REFERENCES users(id),
+      UNIQUE(student_id, exam_type)
+    );
+  `);
+
+  // ===== ADMISSION TRACKER =====
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS universities (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL,
+      city       TEXT,
+      website    TEXT,
+      logo_url   TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS specialties (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      code             TEXT NOT NULL,
+      name             TEXT NOT NULL,
+      profile_subjects TEXT,
+      created_at       TEXT DEFAULT (datetime('now')),
+      UNIQUE(code)
+    );
+
+    CREATE TABLE IF NOT EXISTS passing_scores (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      university_id  INTEGER NOT NULL,
+      specialty_id   INTEGER NOT NULL,
+      year           INTEGER NOT NULL DEFAULT 2026,
+      grant_score    INTEGER,
+      paid_score     INTEGER,
+      FOREIGN KEY(university_id) REFERENCES universities(id) ON DELETE CASCADE,
+      FOREIGN KEY(specialty_id)  REFERENCES specialties(id)  ON DELETE CASCADE,
+      UNIQUE(university_id, specialty_id, year)
+    );
+  `);
+
+  // Migrate: add admission tracker fields to students
+  try { db.exec(`ALTER TABLE students ADD COLUMN target_university_id INTEGER REFERENCES universities(id)`); } catch {}
+  try { db.exec(`ALTER TABLE students ADD COLUMN target_specialty_id  INTEGER REFERENCES specialties(id)`);  } catch {}
+  try { db.exec(`ALTER TABLE students ADD COLUMN unt_january_score INTEGER`); } catch {}
+  try { db.exec(`ALTER TABLE students ADD COLUMN unt_march_score   INTEGER`); } catch {}
+  try { db.exec(`ALTER TABLE students ADD COLUMN unt_grant_1_score INTEGER`); } catch {}
+  try { db.exec(`ALTER TABLE students ADD COLUMN unt_grant_2_score INTEGER`); } catch {}
+
+  // Custom columns for admission tracker
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS admission_custom_columns (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL,
+      type       TEXT NOT NULL DEFAULT 'checkbox',
+      position   INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS admission_custom_values (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL,
+      column_id  INTEGER NOT NULL,
+      value      TEXT,
+      UNIQUE(student_id, column_id),
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+      FOREIGN KEY(column_id)  REFERENCES admission_custom_columns(id) ON DELETE CASCADE
+    );
+  `);
+
+  // Schedule share tokens (for public schedule links)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schedule_share_tokens (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      token      TEXT UNIQUE NOT NULL,
+      group_id   INTEGER,
+      created_by INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY(group_id)   REFERENCES groups(id) ON DELETE CASCADE,
+      FOREIGN KEY(created_by) REFERENCES users(id)
+    );
+  `);
+
   // Permissions tables
   db.exec(`
     CREATE TABLE IF NOT EXISTS permissions (

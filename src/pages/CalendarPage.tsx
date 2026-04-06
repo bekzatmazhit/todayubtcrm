@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { loadLessons, saveLessons } from "@/lib/storage";
 import { Lesson } from "@/data/mockSchedule";
 import { fetchLessons, fetchTasks, fetchTimeSlots, updateTask, fetchNotes, createNote as createNoteAPI, deleteNoteById, fetchAdhocLessons, createAdhocLesson, deleteAdhocLesson, updateAdhocLessonAttendance, fetchStudents, fetchUsers, fetchSubjects, fetchMarkedLessons, fetchScheduleFillStatus, fetchAttendanceReconciliation } from "@/lib/api";
@@ -6,7 +6,8 @@ import { ClassManagementModal } from "@/components/ClassManagementModal";
 import ScheduleConstructor from "@/components/ScheduleConstructor";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { useAuth } from "@/contexts/AuthContext";
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, X, Settings2, PanelRightClose, PanelRightOpen, CheckCircle2, Circle, ListTodo, Download, Users as UsersIcon, ClipboardCheck, StickyNote } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, X, Settings2, PanelRightClose, PanelRightOpen, CheckCircle2, Circle, ListTodo, Download, Users as UsersIcon, ClipboardCheck, StickyNote, Share2, Copy, Check, Trash2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -33,6 +34,14 @@ const GROUP_COLORS = [
 ];
 const getGroupColor = (groupId: number) => GROUP_COLORS[(groupId - 1) % GROUP_COLORS.length];
 
+const GROUP_BG_COLORS = [
+  "bg-blue-500", "bg-emerald-500", "bg-violet-500",
+  "bg-amber-500", "bg-rose-500", "bg-cyan-500",
+  "bg-orange-500", "bg-pink-500", "bg-teal-500",
+  "bg-indigo-500", "bg-lime-500", "bg-red-500",
+];
+const getGroupBgColor = (groupId: number) => GROUP_BG_COLORS[(groupId - 1) % GROUP_BG_COLORS.length];
+
 type ViewMode = "day" | "week" | "month" | "report" | "reconciliation";
 
 interface CalendarNote {
@@ -46,7 +55,9 @@ interface CalendarNote {
 export default function CalendarPage() {
   const { user } = useAuth();
   const { t, i18n } = useTranslation();
+  const isMobile = useIsMobile();
   const dateFnsLocale = i18n.language === "kk" ? dateFnsKk : i18n.language === "en" ? dateFnsEn : dateFnsRu;
+  const swipeStartX = useRef<number | null>(null);
   const [selectedLesson, setSelectedLesson] = useState<Lesson | null>(null);
   const [selectedLessonDate, setSelectedLessonDate] = useState<string>(() => format(new Date(), "yyyy-MM-dd"));
   const [modalOpen, setModalOpen] = useState(false);
@@ -69,6 +80,11 @@ export default function CalendarPage() {
   
   const [newNote, setNewNote] = useState({ title: "", description: "", time_slot: "", date: "" });
   const [showConstructor, setShowConstructor] = useState(false);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [shareTokens, setShareTokens] = useState<{ id: number; token: string; group_id: number | null; group_name: string | null; created_at: string }[]>([]);
+  const [shareGroupId, setShareGroupId] = useState<string>("all");
+  const [shareCreating, setShareCreating] = useState(false);
+  const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [showTaskPanel, _setShowTaskPanel] = useState(() => {
     try { const v = localStorage.getItem("today_cal_taskPanel"); if (v !== null) return v === "true"; } catch {} return true;
   });
@@ -452,9 +468,58 @@ export default function CalendarPage() {
     return format(currentDate, "MMMM yyyy", { locale: dateFnsLocale });
   }, [viewMode, currentDate, weekDays, dateFnsLocale]);
 
+  const loadShareTokens = async () => {
+    try {
+      const res = await fetch("/api/schedule/share-tokens");
+      if (res.ok) setShareTokens(await res.json());
+    } catch {}
+  };
+
+  const handleOpenShareDialog = () => {
+    setShareDialogOpen(true);
+    loadShareTokens();
+  };
+
+  const handleCreateShareToken = async () => {
+    setShareCreating(true);
+    try {
+      const res = await fetch("/api/schedule/share-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ group_id: shareGroupId === "all" ? null : parseInt(shareGroupId) }),
+      });
+      if (res.ok) {
+        await loadShareTokens();
+        toast.success("Ссылка создана");
+      }
+    } catch { toast.error("Ошибка создания ссылки"); }
+    setShareCreating(false);
+  };
+
+  const handleDeleteShareToken = async (token: string) => {
+    try {
+      await fetch(`/api/schedule/share-token/${token}`, { method: "DELETE" });
+      await loadShareTokens();
+    } catch { toast.error("Ошибка удаления"); }
+  };
+
+  const handleCopyLink = (token: string) => {
+    const url = `${window.location.origin}/schedule/${token}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedToken(token);
+      setTimeout(() => setCopiedToken(null), 2000);
+    });
+  };
+
   const exportSchedulePDF = () => {
     const cols = scheduleViewMode === "teachers" ? allTeachers : allGroups;
     const colLabel = scheduleViewMode === "teachers" ? "Преподаватель" : "Группа";
+
+    const PDF_GROUP_COLORS = [
+      "#3b82f6","#10b981","#8b5cf6","#f59e0b","#f43f5e","#06b6d4",
+      "#f97316","#ec4899","#14b8a6","#6366f1","#84cc16","#ef4444",
+    ];
+    const getPdfGroupColor = (groupId: number) => PDF_GROUP_COLORS[(groupId - 1) % PDF_GROUP_COLORS.length];
 
     const pdfStyles = `
       * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -503,19 +568,37 @@ export default function CalendarPage() {
         );
       };
 
-      const rows = allTimeSlots.map(slot => {
-        const cells = cols.map(c => {
+      // Only show columns that have at least one lesson this day
+      const activeCols = cols.filter(c =>
+        allTimeSlots.some(slot => getLessonForCol(c.id, slot.start_time))
+      );
+      if (activeCols.length === 0) return '';
+
+      // Only show time slots that have at least one lesson among active cols
+      const activeSlots = allTimeSlots.filter(slot =>
+        activeCols.some(c => getLessonForCol(c.id, slot.start_time))
+      );
+
+      const headerCells = activeCols.map(c => {
+        const color = scheduleViewMode === "groups" ? getPdfGroupColor(c.id) : "#6366f1";
+        return `<th style="border-top:4px solid ${color}">${c.name}</th>`;
+      }).join('');
+
+      const rows = activeSlots.map(slot => {
+        const cells = activeCols.map(c => {
           const lesson = getLessonForCol(c.id, slot.start_time);
           if (!lesson) return '<td class="empty">—</td>';
+          const groupId = scheduleViewMode === "teachers" ? lesson.group_id : c.id;
+          const color = getPdfGroupColor(groupId || c.id);
           const info = scheduleViewMode === "teachers"
-            ? `<div class="subject">${lesson.group_name}</div><div class="group">${lesson.subject}</div>`
-            : `<div class="subject">${lesson.subject}</div><div class="teacher">${lesson.teacher_name}</div>`;
-          return `<td>${info}</td>`;
+            ? `<div class="subject">${lesson.group_name || ''}</div><div class="group">${lesson.subject || ''}</div>`
+            : `<div class="subject">${lesson.subject || ''}</div><div class="teacher">${lesson.teacher_name || ''}</div>`;
+          return `<td style="border-left:4px solid ${color};background:${color}14">${info}</td>`;
         }).join('');
         return `<tr><td class="time">${slot.start_time}${slot.end_time ? '<br>' + slot.end_time : ''}</td>${cells}</tr>`;
       }).join('');
 
-      return `<table><thead><tr><th>Время</th>${cols.map(c => `<th>${c.name}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
+      return `<table><thead><tr><th>Время</th>${headerCells}</tr></thead><tbody>${rows}</tbody></table>`;
     };
 
     let bodyContent = '';
@@ -532,8 +615,10 @@ export default function CalendarPage() {
         const ds = format(day, "yyyy-MM-dd");
         const dayLessons = allLessons.filter((l: any) => l.dates && l.dates.includes(ds));
         if (dayLessons.length === 0) return;
+        const tableHtml = buildDayTable(ds, dayLessons);
+        if (!tableHtml) return;
         bodyContent += `<div class="day-header">${DAY_NAMES_RU[i]} — ${format(day, "dd.MM.yyyy")}</div>`;
-        bodyContent += buildDayTable(ds, dayLessons);
+        bodyContent += tableHtml;
       });
     } else {
       // month - export current week as fallback
@@ -545,8 +630,10 @@ export default function CalendarPage() {
         const ds = format(day, "yyyy-MM-dd");
         const dayLessons = allLessons.filter((l: any) => l.dates && l.dates.includes(ds));
         if (dayLessons.length === 0) return;
+        const tableHtml = buildDayTable(ds, dayLessons);
+        if (!tableHtml) return;
         bodyContent += `<div class="day-header">${DAY_NAMES_RU[i]} — ${format(day, "dd.MM.yyyy")}</div>`;
-        bodyContent += buildDayTable(ds, dayLessons);
+        bodyContent += tableHtml;
       });
     }
 
@@ -621,6 +708,16 @@ ${getPrintWatermarkStyles()}</style></head><body>
                 <TooltipContent>Скачать PDF</TooltipContent>
               </Tooltip>
               {user?.role === "admin" && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={handleOpenShareDialog}>
+                      <Share2 className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Поделиться расписанием</TooltipContent>
+                </Tooltip>
+              )}
+              {user?.role === "admin" && (
                 <>
                   <div className="w-px h-5 bg-border mx-1" />
                   <Tooltip>
@@ -678,7 +775,7 @@ ${getPrintWatermarkStyles()}</style></head><body>
               </button>
             ))}
           </div>
-          {user?.role === "admin" && viewMode === "day" && !showConstructor && (
+          {user?.role === "admin" && viewMode === "day" && !showConstructor && !isMobile && (
             <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
               <button
                 onClick={() => setScheduleViewMode("teachers")}
@@ -726,8 +823,73 @@ ${getPrintWatermarkStyles()}</style></head><body>
               ))}
             </div>
           )}
+          {/* Mobile Day View — cards */}
+          {isMobile && (
+            <div
+              onTouchStart={e => { swipeStartX.current = e.touches[0].clientX; }}
+              onTouchEnd={e => {
+                if (swipeStartX.current === null) return;
+                const dx = e.changedTouches[0].clientX - swipeStartX.current;
+                if (Math.abs(dx) > 60) navigateDate(dx < 0 ? 1 : -1);
+                swipeStartX.current = null;
+              }}
+              className="space-y-2 pb-24"
+            >
+              {lessons.length === 0 && adhocLessons.length === 0 ? (
+                <div className="text-center py-16 text-muted-foreground">
+                  <CalendarIcon className="h-12 w-12 mx-auto mb-3 opacity-20" />
+                  <p className="text-sm">Уроков нет</p>
+                  <p className="text-xs mt-1 opacity-60">Проведите влево/вправо для смены дня</p>
+                </div>
+              ) : (
+                <>
+                  {[...lessons].sort((a, b) => (a.time_slot || '').localeCompare(b.time_slot || '')).map((lesson) => {
+                    const slot = allTimeSlots.find(s => s.start_time === lesson.time_slot);
+                    const marked = isLessonMarked(lesson, format(currentDate, "yyyy-MM-dd"));
+                    const colorBg = getGroupBgColor(lesson.group_id);
+                    return (
+                      <button key={`mob-${lesson.id}`}
+                        onClick={() => handleCellClick(lesson)}
+                        className={`w-full text-left flex items-stretch rounded-xl border bg-card shadow-sm overflow-hidden active:scale-[0.98] transition-transform ${marked ? "ring-2 ring-primary/40" : ""}`}
+                      >
+                        <div className="flex flex-col items-center justify-center bg-muted/50 px-3 py-3 min-w-[68px]">
+                          <span className="text-base font-bold text-primary leading-tight">{lesson.time_slot}</span>
+                          {slot?.end_time && <span className="text-[10px] text-muted-foreground mt-0.5">{slot.end_time}</span>}
+                        </div>
+                        <div className={`w-1 shrink-0 ${colorBg}`} />
+                        <div className="flex-1 px-3 py-3 min-w-0">
+                          <p className="font-semibold text-sm leading-tight truncate">{lesson.group_name}</p>
+                          <p className="text-sm text-muted-foreground truncate mt-0.5">{lesson.subject}</p>
+                          <p className="text-xs text-muted-foreground/70 mt-1 truncate">
+                            {lesson.teacher_name}{lesson.room ? ` · ${lesson.room}` : ''}
+                          </p>
+                        </div>
+                        {marked && <div className="flex items-center pr-3"><CheckCircle2 className="h-5 w-5 text-primary" /></div>}
+                      </button>
+                    );
+                  })}
+                  {adhocLessons.map((al) => (
+                    <button key={`mob-adhoc-${al.id}`}
+                      onClick={() => setAdhocAttendanceModal(al)}
+                      className="w-full text-left flex items-stretch rounded-xl border border-primary/30 bg-primary/5 shadow-sm overflow-hidden active:scale-[0.98] transition-transform"
+                    >
+                      <div className="flex flex-col items-center justify-center bg-primary/10 px-3 py-3 min-w-[68px]">
+                        <span className="text-base font-bold text-primary leading-tight">{al.time_slot}</span>
+                      </div>
+                      <div className="w-1 bg-primary shrink-0" />
+                      <div className="flex-1 px-3 py-3 min-w-0">
+                        <p className="font-semibold text-sm">{al.title}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{al.teacher_name} {al.teacher_surname} · {al.students?.length || 0} уч.</p>
+                      </div>
+                      <div className="flex items-center pr-3"><UsersIcon className="h-4 w-4 text-primary" /></div>
+                    </button>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
           {/* Ad-hoc lessons for today */}
-          {adhocLessons.length > 0 && (
+          {!isMobile && adhocLessons.length > 0 && (
             <div className="mb-4 space-y-2">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Сборные уроки</p>
               {adhocLessons.map((al) => (
@@ -746,7 +908,7 @@ ${getPrintWatermarkStyles()}</style></head><body>
               ))}
             </div>
           )}
-          {user?.role === "admin" ? (
+          {!isMobile && (user?.role === "admin" ? (
             /* Admin view: switchable between teachers and groups */
             <div className="rounded-xl border border-border bg-card overflow-auto shadow-sm">
               {scheduleViewMode === "teachers" ? (
@@ -897,7 +1059,7 @@ ${getPrintWatermarkStyles()}</style></head><body>
                 </tbody>
               </table>
             </div>
-          )}
+          ))}
         </>
       )}
 
@@ -1249,6 +1411,73 @@ ${getPrintWatermarkStyles()}</style></head><body>
           </div>
         );
       })()}
+
+      {/* Share Schedule Dialog */}
+      <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Share2 className="h-4 w-4" /> Поделиться расписанием
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-xs text-muted-foreground">
+              Создайте публичную ссылку на расписание — просматривать её смогут без авторизации.
+            </p>
+            <div className="flex gap-2">
+              <Select value={shareGroupId} onValueChange={setShareGroupId}>
+                <SelectTrigger className="flex-1">
+                  <SelectValue placeholder="Группа" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Все группы</SelectItem>
+                  {allGroups.map(g => (
+                    <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button onClick={handleCreateShareToken} disabled={shareCreating} size="sm">
+                {shareCreating ? "..." : "Создать ссылку"}
+              </Button>
+            </div>
+            {shareTokens.length > 0 && (
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {shareTokens.map(t => {
+                  const url = `${window.location.origin}/schedule/${t.token}`;
+                  return (
+                    <div key={t.id} className="flex items-center gap-2 p-2 rounded-lg border bg-muted/30 text-xs">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{t.group_name || "Все группы"}</div>
+                        <div className="text-muted-foreground truncate">{url}</div>
+                      </div>
+                      <button
+                        onClick={() => handleCopyLink(t.token)}
+                        className="flex items-center gap-1 px-2 py-1 rounded bg-primary/10 hover:bg-primary/20 transition-colors text-primary flex-shrink-0"
+                        title="Копировать ссылку"
+                      >
+                        {copiedToken === t.token ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                        {copiedToken === t.token ? "Скопировано" : "Копировать"}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteShareToken(t.token)}
+                        className="p-1 rounded hover:bg-destructive/10 text-destructive/70 hover:text-destructive transition-colors flex-shrink-0"
+                        title="Удалить ссылку"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {shareTokens.length === 0 && (
+              <p className="text-xs text-muted-foreground text-center py-4">
+                Нет активных ссылок. Создайте первую.
+              </p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Add Note Modal */}
       <Dialog open={noteModalOpen} onOpenChange={setNoteModalOpen}>

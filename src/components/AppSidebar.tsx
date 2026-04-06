@@ -1,7 +1,7 @@
 import {
   Calendar, Users, BarChart3, Shield, UsersRound, ListTodo,
   FolderOpen, Settings, LogOut, LayoutDashboard, BookOpen, ClipboardCheck, Megaphone, FileText,
-  ExternalLink, ChevronRight, MessageCircle, PieChart, Activity, FileSpreadsheet, MoreHorizontal,
+  ExternalLink, ChevronRight, MessageCircle, PieChart, Activity, FileSpreadsheet, MoreHorizontal, GraduationCap,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -21,6 +21,7 @@ const navItems = [
   { titleKey: "Calendar", url: "/", icon: Calendar, roles: ["admin", "umo_head", "teacher"] },
   { titleKey: "Students", url: "/students", icon: Users, roles: ["admin", "umo_head", "teacher"] },
   { titleKey: "ENT Results", url: "/ent-results", icon: BarChart3, roles: ["admin", "umo_head", "teacher"] },
+  { titleKey: "Admission", url: "/admission", icon: GraduationCap, roles: ["admin", "umo_head"] },
   { titleKey: "Curatorship", url: "/curatorship", icon: Shield, roles: ["admin", "umo_head", "teacher"] },
   { titleKey: "Team", url: "/team", icon: UsersRound, roles: ["admin", "umo_head"] },
   { titleKey: "Tasks", url: "/tasks", icon: ListTodo, roles: ["admin", "umo_head", "teacher"] },

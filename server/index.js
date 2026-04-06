@@ -494,6 +494,84 @@ app.post("/api/schedule/publish", (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Create public schedule share token (admin only)
+app.post("/api/schedule/share-token", (req, res) => {
+  try {
+    const { group_id } = req.body;
+    const createdBy = req.user?.id || null;
+    const token = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    db.prepare(
+      "INSERT INTO schedule_share_tokens (token, group_id, created_by) VALUES (?, ?, ?)"
+    ).run(token, group_id || null, createdBy);
+    res.json({ token });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete a share token
+app.delete("/api/schedule/share-token/:token", (req, res) => {
+  try {
+    db.prepare("DELETE FROM schedule_share_tokens WHERE token = ?").run(req.params.token);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// List share tokens (admin)
+app.get("/api/schedule/share-tokens", (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT t.id, t.token, t.group_id, t.created_at, g.name as group_name
+      FROM schedule_share_tokens t
+      LEFT JOIN groups g ON t.group_id = g.id
+      ORDER BY t.created_at DESC
+    `).all();
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Singular alias (same handler)
+app.get("/api/schedule/share-token", (req, res) => res.redirect(307, "/api/schedule/share-tokens"));
+
+// PUBLIC endpoint — no auth required — returns schedule for a share token
+app.get("/api/public/schedule/:token", (req, res) => {
+  try {
+    const tokenRow = db.prepare("SELECT * FROM schedule_share_tokens WHERE token = ?").get(req.params.token);
+    if (!tokenRow) return res.status(404).json({ error: "Ссылка недействительна" });
+
+    let query = `
+      SELECT s.id, s.group_id, s.subject_id, s.teacher_id, s.room_id, s.time_slot_id, s.cycle,
+             s.custom_label,
+             g.name as group_name,
+             subj.name as subject_name,
+             u.name || ' ' || u.surname as teacher_name,
+             r.name as room_name,
+             ts.start_time, ts.end_time, ts.label as time_label
+      FROM schedule s
+      LEFT JOIN groups g ON s.group_id = g.id
+      LEFT JOIN subjects subj ON s.subject_id = subj.id
+      LEFT JOIN users u ON s.teacher_id = u.id
+      LEFT JOIN rooms r ON s.room_id = r.id
+      LEFT JOIN time_slots ts ON s.time_slot_id = ts.id
+    `;
+    const params = [];
+    if (tokenRow.group_id) {
+      query += " WHERE s.group_id = ?";
+      params.push(tokenRow.group_id);
+    }
+    query += " ORDER BY ts.start_time, g.name";
+
+    const entries = db.prepare(query).all(...params);
+
+    // Group info
+    const group = tokenRow.group_id
+      ? db.prepare("SELECT id, name FROM groups WHERE id = ?").get(tokenRow.group_id)
+      : null;
+
+    // All groups (for cross-group view)
+    const groups = db.prepare("SELECT id, name FROM groups ORDER BY name").all();
+
+    res.json({ entries, group, groups, token: req.params.token });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Conflict checking endpoint
 app.post("/api/schedule/check-conflicts", (req, res) => {
   try {
@@ -914,6 +992,7 @@ app.get("/api/student-360/:id", (req, res) => {
       attendance: { stats: attStats, byMonth: attMonthly, bySubject: attBySubject, records: attRecords },
       ent: { byMonth: entByMonth, bySubject: entBySubject, groupBenchmark, lastMonth: lastEntMonth },
       teacherFeedback, parentFeedback, callHistory, curatorLogs, quizzes: studentQuizzes,
+      entCertificates: db.prepare("SELECT * FROM ent_certificates WHERE student_id = ? ORDER BY exam_type").all(sid),
     });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -1379,6 +1458,48 @@ app.post("/api/ent-results/batch", (req, res) => {
     });
     tx();
     res.json({ success: true, count: scores.length });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ====================== ENT CERTIFICATES ======================
+
+app.get("/api/students/:id/ent-certificates", (req, res) => {
+  try {
+    const certs = db.prepare("SELECT * FROM ent_certificates WHERE student_id = ? ORDER BY exam_type").all(parseInt(req.params.id));
+    res.json(certs);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post("/api/students/:id/ent-certificates/:type", upload.single("file"), (req, res) => {
+  try {
+    const studentId = parseInt(req.params.id);
+    const examType = req.params.type;
+    const validTypes = ["1000-01", "1000-03", "1001-01", "1001-02"];
+    if (!validTypes.includes(examType)) return res.status(400).json({ error: "Invalid exam type" });
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    // Remove old file if exists
+    const existing = db.prepare("SELECT * FROM ent_certificates WHERE student_id = ? AND exam_type = ?").get(studentId, examType);
+    if (existing) {
+      try { fs.unlinkSync(path.join(uploadsDir, existing.filename)); } catch {}
+      db.prepare("DELETE FROM ent_certificates WHERE student_id = ? AND exam_type = ?").run(studentId, examType);
+    }
+
+    const result = db.prepare(
+      "INSERT INTO ent_certificates (student_id, exam_type, filename, original_name, file_path, file_size, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).run(studentId, examType, req.file.filename, req.file.originalname, "/uploads/" + req.file.filename, req.file.size, req.body.uploaded_by || null);
+
+    res.json({ id: result.lastInsertRowid, filename: req.file.filename, original_name: req.file.originalname, file_path: "/uploads/" + req.file.filename });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.delete("/api/ent-certificates/:id", (req, res) => {
+  try {
+    const cert = db.prepare("SELECT * FROM ent_certificates WHERE id = ?").get(parseInt(req.params.id));
+    if (!cert) return res.status(404).json({ error: "Not found" });
+    try { fs.unlinkSync(path.join(uploadsDir, cert.filename)); } catch {}
+    db.prepare("DELETE FROM ent_certificates WHERE id = ?").run(cert.id);
+    res.json({ success: true });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -3699,10 +3820,202 @@ if (fs.existsSync(distDir)) {
   });
 }
 
+// ====================== ADMISSION TRACKER ======================
+
+// Universities CRUD
+app.get("/api/universities", (req, res) => {
+  try { res.json(db.prepare("SELECT * FROM universities ORDER BY name").all()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/universities", (req, res) => {
+  try {
+    const { name, city, website, logo_url } = req.body;
+    if (!name) return res.status(400).json({ error: "name required" });
+    const r = db.prepare("INSERT INTO universities (name, city, website, logo_url) VALUES (?, ?, ?, ?)").run(name, city || null, website || null, logo_url || null);
+    res.json({ id: r.lastInsertRowid, name, city, website, logo_url });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put("/api/universities/:id", (req, res) => {
+  try {
+    const { name, city, website, logo_url } = req.body;
+    db.prepare("UPDATE universities SET name=?, city=?, website=?, logo_url=? WHERE id=?").run(name, city || null, website || null, logo_url || null, parseInt(req.params.id));
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete("/api/universities/:id", (req, res) => {
+  try { db.prepare("DELETE FROM universities WHERE id=?").run(parseInt(req.params.id)); res.json({ success: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Specialties CRUD
+app.get("/api/specialties", (req, res) => {
+  try { res.json(db.prepare("SELECT * FROM specialties ORDER BY code").all()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/specialties", (req, res) => {
+  try {
+    const { code, name, profile_subjects } = req.body;
+    if (!code || !name) return res.status(400).json({ error: "code and name required" });
+    const r = db.prepare("INSERT INTO specialties (code, name, profile_subjects) VALUES (?, ?, ?)").run(code, name, profile_subjects || null);
+    res.json({ id: r.lastInsertRowid, code, name, profile_subjects });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put("/api/specialties/:id", (req, res) => {
+  try {
+    const { code, name, profile_subjects } = req.body;
+    db.prepare("UPDATE specialties SET code=?, name=?, profile_subjects=? WHERE id=?").run(code, name, profile_subjects || null, parseInt(req.params.id));
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete("/api/specialties/:id", (req, res) => {
+  try { db.prepare("DELETE FROM specialties WHERE id=?").run(parseInt(req.params.id)); res.json({ success: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Passing Scores
+app.get("/api/passing-scores", (req, res) => {
+  try {
+    const { university_id, specialty_id, year } = req.query;
+    let q = `SELECT ps.*, u.name as university_name, s.name as specialty_name, s.code as specialty_code
+             FROM passing_scores ps
+             JOIN universities u ON ps.university_id = u.id
+             JOIN specialties  s ON ps.specialty_id  = s.id WHERE 1=1`;
+    const params = [];
+    if (university_id) { q += " AND ps.university_id=?"; params.push(parseInt(university_id)); }
+    if (specialty_id)  { q += " AND ps.specialty_id=?";  params.push(parseInt(specialty_id)); }
+    if (year)          { q += " AND ps.year=?";           params.push(parseInt(year)); }
+    res.json(db.prepare(q).all(...params));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/passing-scores", (req, res) => {
+  try {
+    const { university_id, specialty_id, year = 2026, grant_score, paid_score } = req.body;
+    if (!university_id || !specialty_id) return res.status(400).json({ error: "university_id and specialty_id required" });
+    db.prepare(`INSERT INTO passing_scores (university_id, specialty_id, year, grant_score, paid_score) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(university_id, specialty_id, year) DO UPDATE SET grant_score=excluded.grant_score, paid_score=excluded.paid_score`)
+      .run(parseInt(university_id), parseInt(specialty_id), parseInt(year), grant_score ?? null, paid_score ?? null);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete("/api/passing-scores/:id", (req, res) => {
+  try { db.prepare("DELETE FROM passing_scores WHERE id=?").run(parseInt(req.params.id)); res.json({ success: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Student admission target + scores
+app.patch("/api/students/:id/admission", (req, res) => {
+  try {
+    const { target_university_id, target_specialty_id } = req.body;
+    db.prepare(`UPDATE students SET target_university_id=?, target_specialty_id=? WHERE id=?`)
+      .run(target_university_id ?? null, target_specialty_id ?? null, parseInt(req.params.id));
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Admission tracker table data (all students with targets + passing scores)
+app.get("/api/admission-tracker", (req, res) => {
+  try {
+    const { group_id } = req.query;
+    let q = `SELECT s.id, s.full_name, s.group_id, g.name as group_name,
+      s.target_university_id, s.target_specialty_id,
+      (SELECT SUM(e.score) FROM ent_results e WHERE e.student_id = s.id AND e.month = '1000-01') as unt_january_score,
+      (SELECT SUM(e.score) FROM ent_results e WHERE e.student_id = s.id AND e.month = '1000-03') as unt_march_score,
+      (SELECT SUM(e.score) FROM ent_results e WHERE e.student_id = s.id AND e.month = '1001-01') as unt_grant_1_score,
+      (SELECT SUM(e.score) FROM ent_results e WHERE e.student_id = s.id AND e.month = '1001-02') as unt_grant_2_score,
+      u.name as university_name, u.logo_url as university_logo_url, sp.name as specialty_name, sp.code as specialty_code,
+      ps.grant_score, ps.paid_score, ps.year as ps_year
+      FROM students s
+      LEFT JOIN groups g ON s.group_id = g.id
+      LEFT JOIN universities u  ON s.target_university_id = u.id
+      LEFT JOIN specialties  sp ON s.target_specialty_id  = sp.id
+      LEFT JOIN passing_scores ps ON ps.university_id = s.target_university_id
+                                  AND ps.specialty_id  = s.target_specialty_id
+                                  AND ps.year = 2026
+      WHERE s.status = 'active'`;
+    const params = [];
+    if (group_id) { q += " AND s.group_id=?"; params.push(parseInt(group_id)); }
+    q += " ORDER BY g.name, s.full_name";
+    res.json(db.prepare(q).all(...params));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Custom columns CRUD
+app.get("/api/admission-custom-columns", (req, res) => {
+  try { res.json(db.prepare("SELECT * FROM admission_custom_columns ORDER BY position, id").all()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post("/api/admission-custom-columns", (req, res) => {
+  try {
+    const { name, type = "checkbox" } = req.body;
+    const pos = (db.prepare("SELECT MAX(position) as m FROM admission_custom_columns").get()?.m ?? 0) + 1;
+    const r = db.prepare("INSERT INTO admission_custom_columns (name, type, position) VALUES (?,?,?)").run(name, type, pos);
+    res.json({ id: r.lastInsertRowid, name, type, position: pos });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put("/api/admission-custom-columns/:id", (req, res) => {
+  try {
+    const { name, type } = req.body;
+    db.prepare("UPDATE admission_custom_columns SET name=?, type=? WHERE id=?").run(name, type, parseInt(req.params.id));
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete("/api/admission-custom-columns/:id", (req, res) => {
+  try {
+    db.prepare("DELETE FROM admission_custom_columns WHERE id=?").run(parseInt(req.params.id));
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Custom values (per student per column)
+app.get("/api/admission-custom-values", (req, res) => {
+  try { res.json(db.prepare("SELECT * FROM admission_custom_values").all()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put("/api/admission-custom-values", (req, res) => {
+  try {
+    const { student_id, column_id, value } = req.body;
+    db.prepare("INSERT INTO admission_custom_values (student_id, column_id, value) VALUES (?,?,?) ON CONFLICT(student_id, column_id) DO UPDATE SET value=excluded.value")
+      .run(parseInt(student_id), parseInt(column_id), value ?? null);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Bulk import universities from parsed XLSX data
+app.post("/api/universities/bulk", (req, res) => {
+  try {
+    const rows = req.body;
+    if (!Array.isArray(rows)) return res.status(400).json({ error: "Expected array" });
+    const ins = db.prepare("INSERT OR IGNORE INTO universities (name, city, website, logo_url) VALUES (?,?,?,?)");
+    const tx = db.transaction(() => rows.forEach(r => ins.run(r.name ?? "", r.city ?? null, r.website ?? null, r.logo_url ?? null)));
+    tx();
+    res.json({ inserted: rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Bulk import specialties from parsed XLSX data
+app.post("/api/specialties/bulk", (req, res) => {
+  try {
+    const rows = req.body;
+    if (!Array.isArray(rows)) return res.status(400).json({ error: "Expected array" });
+    const ins = db.prepare("INSERT OR IGNORE INTO specialties (code, name, profile_subjects) VALUES (?,?,?)");
+    const tx = db.transaction(() => rows.forEach(r => ins.run(r.code ?? "", r.name ?? "", r.profile_subjects ?? null)));
+    tx();
+    res.json({ inserted: rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ====================== START ======================
 
 const server = app.listen(PORT, () => {
-  console.log("\ud83d\ude80 Server running on http://localhost:" + PORT);
+  console.log("🚀 Server running on http://localhost:" + PORT);
 });
 
 // ====================== WEBSOCKET ======================

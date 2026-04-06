@@ -1,4 +1,8 @@
 const CACHE_NAME = 'today-crm-v4';
+const API_CACHE_NAME = 'today-api-v1';
+const API_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+// API routes to cache for offline schedule access
+const API_CACHEABLE = ['/api/lessons', '/api/time-slots', '/api/groups', '/api/subjects', '/api/users'];
 const STATIC_ASSETS = [
   '/',
   '/favicon.svg',
@@ -45,7 +49,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => k !== CACHE_NAME && k !== API_CACHE_NAME).map((k) => caches.delete(k)))
     )
   );
   self.clients.claim();
@@ -55,8 +59,39 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
 
-  // API calls — network only
-  if (request.url.includes('/api/')) return;
+  // API calls — cache selected routes (schedule data), network-only for others
+  if (request.url.includes('/api/')) {
+    const isCacheable = API_CACHEABLE.some(route => request.url.includes(route));
+    if (!isCacheable) return; // pass through uncacheable API calls
+
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.ok) {
+            const clone = response.clone();
+            caches.open(API_CACHE_NAME).then((cache) => {
+              cache.put(request, clone);
+              // Store timestamp for TTL
+              cache.put(request.url + '__ts', new Response(String(Date.now())));
+            });
+          }
+          return response;
+        })
+        .catch(async () => {
+          // Offline: try API cache with TTL check
+          const cache = await caches.open(API_CACHE_NAME);
+          const tsResponse = await cache.match(request.url + '__ts');
+          if (tsResponse) {
+            const ts = parseInt(await tsResponse.text(), 10);
+            if (Date.now() - ts < API_CACHE_TTL_MS) {
+              return cache.match(request) || new Response('[]', { headers: { 'Content-Type': 'application/json' } });
+            }
+          }
+          return new Response('[]', { headers: { 'Content-Type': 'application/json' } });
+        })
+    );
+    return;
+  }
 
   // Dev assets — network only (never cache Vite internals)
   if (request.url.includes('/node_modules/') || request.url.includes('/@') || request.url.includes('/src/')) return;

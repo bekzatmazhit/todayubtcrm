@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
-  BookOpen, CheckCircle2, XCircle, Clock, Calendar, Star, TrendingUp, AlertTriangle
+  BookOpen, CheckCircle2, XCircle, Clock, Calendar, Star, TrendingUp, AlertTriangle,
+  Upload, Download, Trash2, FileText, Award,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -12,6 +14,107 @@ import {
 } from "recharts";
 
 type Props = { data: any };
+
+const CERT_SLOTS = [
+  { type: "1000-01", label: "Январьский ЕНТ",  short: "Янв. ЕНТ" },
+  { type: "1000-03", label: "Мартовский ЕНТ",   short: "Мар. ЕНТ" },
+  { type: "1001-01", label: "Грантовский ЕНТ 1", short: "Грант 1" },
+  { type: "1001-02", label: "Грантовский ЕНТ 2", short: "Грант 2" },
+];
+
+function EntCertificates({ studentId, initialCerts }: { studentId: number; initialCerts: any[] }) {
+  const [certs, setCerts] = useState<Record<string, any>>(() => {
+    const m: Record<string, any> = {};
+    for (const c of initialCerts) m[c.exam_type] = c;
+    return m;
+  });
+  const [uploading, setUploading] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  const handleUpload = async (examType: string, file: File) => {
+    setUploading(examType);
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const res = await fetch(`/api/students/${studentId}/ent-certificates/${examType}`, { method: "POST", body: fd });
+      if (res.ok) {
+        const data = await res.json();
+        setCerts(prev => ({ ...prev, [examType]: { ...data, exam_type: examType, original_name: file.name } }));
+      }
+    } catch {}
+    setUploading(null);
+  };
+
+  const handleDelete = async (examType: string, certId: number) => {
+    setDeleting(examType);
+    try {
+      const res = await fetch(`/api/ent-certificates/${certId}`, { method: "DELETE" });
+      if (res.ok) setCerts(prev => { const n = { ...prev }; delete n[examType]; return n; });
+    } catch {}
+    setDeleting(null);
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Award className="h-4 w-4 text-amber-500" />
+          Сертификаты ЕНТ
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {CERT_SLOTS.map(slot => {
+            const cert = certs[slot.type];
+            const isUploading = uploading === slot.type;
+            const isDeleting = deleting === slot.type;
+            return (
+              <div key={slot.type} className={cn(
+                "border rounded-xl p-3 flex flex-col gap-2 min-h-[100px] transition-colors",
+                cert ? "border-emerald-200 bg-emerald-50/40 dark:bg-emerald-950/10 dark:border-emerald-800" : "border-dashed border-muted-foreground/30 hover:border-muted-foreground/60"
+              )}>
+                <div className="text-[11px] font-semibold text-muted-foreground">{slot.label}</div>
+                {cert ? (
+                  <>
+                    <div className="flex items-center gap-1.5 flex-1">
+                      <FileText className="h-4 w-4 text-emerald-600 shrink-0" />
+                      <span className="text-xs truncate text-foreground" title={cert.original_name}>{cert.original_name}</span>
+                    </div>
+                    <div className="flex gap-1">
+                      <a href={cert.file_path} target="_blank" rel="noopener noreferrer" className="flex-1">
+                        <Button variant="outline" size="sm" className="w-full h-7 text-[11px]">
+                          <Download className="h-3 w-3 mr-1" />Скачать
+                        </Button>
+                      </a>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-red-500 hover:text-red-600 hover:bg-red-50"
+                        disabled={isDeleting} onClick={() => handleDelete(slot.type, cert.id)}>
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center gap-2">
+                    <Upload className="h-5 w-5 text-muted-foreground/50" />
+                    <Button variant="outline" size="sm" className="h-7 text-[11px]"
+                      disabled={isUploading}
+                      onClick={() => fileRefs.current[slot.type]?.click()}>
+                      {isUploading ? "Загрузка..." : "Загрузить"}
+                    </Button>
+                    <input ref={el => { fileRefs.current[slot.type] = el; }} type="file"
+                      accept=".pdf,.jpg,.jpeg,.png"
+                      className="hidden"
+                      onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(slot.type, f); e.target.value = ""; }} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 const hwStatusBadge = (status: string) => {
   if (status === "submitted") return <Badge className="text-[10px] bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-100">Сдано ✓</Badge>;
@@ -26,7 +129,7 @@ const attendanceBadge = (status: string) => {
 };
 
 export default function GradesTab360({ data }: Props) {
-  const { ent, attendance, teacherFeedback } = data;
+  const { ent, attendance, teacherFeedback, entCertificates, id: studentId } = data;
   const entResults = ent.byMonth || [];
 
   const [selectedMonth, setSelectedMonth] = useState(
@@ -53,6 +156,9 @@ export default function GradesTab360({ data }: Props) {
 
   return (
     <div className="space-y-6">
+      {/* ── ENT CERTIFICATES ─────────────────────────────────────────────── */}
+      <EntCertificates studentId={studentId} initialCerts={entCertificates || []} />
+
       {/* ── ENT RESULTS SECTION ─────────────────────────────────────────── */}
       <Card>
         <CardHeader className="pb-2">

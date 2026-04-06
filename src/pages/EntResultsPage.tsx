@@ -18,7 +18,7 @@ import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -60,26 +60,26 @@ for (const m of REAL_EXAM_TYPES) { MONTH_LABELS[m.value] = m.label; MONTH_SHORT[
 // Profile → 5 ENT subjects (3 mandatory + 2 profile)
 // История: max 20, Чтение: max 10, Мат.грам: max 10, Профильные: max 50
 const ENT_PROFILE_SUBJECTS: Record<number, { id: number; name: string; short: string; max: number }[]> = {
-  1: [ // Мат-Инфо (ИНФМАТ)
-    { id: 1, name: "История Казахстана", short: "ИК", max: 20 },
-    { id: 8, name: "Грамотность чтения", short: "ГЧ", max: 10 },
-    { id: 3, name: "Мат. грамотность", short: "МГ", max: 10 },
-    { id: 2, name: "Математика", short: "Мат", max: 50 },
-    { id: 4, name: "Информатика", short: "Инф", max: 50 },
-  ],
-  2: [ // Мат-Физ (ФМ)
+  1: [ // ФМ (Мат-Физ)
     { id: 1, name: "История Казахстана", short: "ИК", max: 20 },
     { id: 8, name: "Грамотность чтения", short: "ГЧ", max: 10 },
     { id: 3, name: "Мат. грамотность", short: "МГ", max: 10 },
     { id: 2, name: "Математика", short: "Мат", max: 50 },
     { id: 5, name: "Физика", short: "Физ", max: 50 },
   ],
-  3: [ // Био-Хим (ХБ)
+  2: [ // ХБ (Хим-Био)
     { id: 1, name: "История Казахстана", short: "ИК", max: 20 },
     { id: 8, name: "Грамотность чтения", short: "ГЧ", max: 10 },
     { id: 3, name: "Мат. грамотность", short: "МГ", max: 10 },
     { id: 6, name: "Биология", short: "Био", max: 50 },
     { id: 7, name: "Химия", short: "Хим", max: 50 },
+  ],
+  3: [ // ИНФМАТ (Инф-Мат)
+    { id: 1, name: "История Казахстана", short: "ИК", max: 20 },
+    { id: 8, name: "Грамотность чтения", short: "ГЧ", max: 10 },
+    { id: 3, name: "Мат. грамотность", short: "МГ", max: 10 },
+    { id: 2, name: "Математика", short: "Мат", max: 50 },
+    { id: 4, name: "Информатика", short: "Инф", max: 50 },
   ],
 };
 
@@ -141,7 +141,7 @@ function RealEntImportDialog({ open, onOpenChange, groups, onSuccess }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   groups: any[];
-  onSuccess: () => void;
+  onSuccess: (examType: string) => void;
 }) {
   const [mode, setMode] = useState<EntryMode>("manual");
   const [groupId, setGroupId] = useState("");
@@ -232,7 +232,7 @@ function RealEntImportDialog({ open, onOpenChange, groups, onSuccess }: {
     await saveEntResultsBatch(scores);
     setManualSaving(null);
     setSavedStudents(new Set(students.map(st => st.id)));
-    onSuccess();
+    onSuccess(examType);
     onOpenChange(false);
   };
 
@@ -318,13 +318,14 @@ function RealEntImportDialog({ open, onOpenChange, groups, onSuccess }: {
     );
     await saveEntResultsBatch(scores);
     setCsvSaving(false);
-    onSuccess();
+    onSuccess(examType);
     onOpenChange(false);
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[95vw] sm:max-w-3xl max-h-[92vh] flex flex-col p-0 gap-0">
+        <DialogTitle className="sr-only">Реальный ЕНТ — ввод баллов</DialogTitle>
         {/* Header */}
         <div className="px-6 pt-5 pb-4 border-b flex items-start justify-between gap-3">
           <div>
@@ -634,9 +635,9 @@ function ScoreEditorDialog({ student, month, profileId, currentScores, onSave, o
 
 // Profile subject ids for п1/п2 by profile_id
 const PROFILE_SUB_IDS: Record<number, [number, number]> = {
-  1: [2, 4],  // Мат, Инф
-  2: [2, 5],  // Мат, Физ
-  3: [6, 7],  // Био, Хим
+  1: [2, 5],  // ФМ: Мат, Физ
+  2: [6, 7],  // ХБ: Био, Хим
+  3: [2, 4],  // ИНФМАТ: Мат, Инф
 };
 
 interface XlsxRow {
@@ -659,7 +660,7 @@ function EntXlsxImportDialog({ open, onOpenChange, groups, groupProfileMap, stud
   groups: any[];
   groupProfileMap: Record<number, number>;
   studentGroupMap: Record<number, number>;
-  onSuccess: () => void;
+  onSuccess: (savedMonth: string, isReal: boolean) => void;
 }) {
   const [entMode, setEntMode] = useState<EntXlsxMode>("trial");
   const [month, setMonth] = useState(ACADEMIC_MONTHS[ACADEMIC_MONTHS.length - 1].value);
@@ -667,19 +668,45 @@ function EntXlsxImportDialog({ open, onOpenChange, groups, groupProfileMap, stud
   const [groupId, setGroupId] = useState("all");
   const [rows, setRows] = useState<XlsxRow[] | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [fileName, setFileName] = useState("");
+  const [students, setStudents] = useState<{ id: number; full_name: string; group_id: number }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const lastFileRef = useRef<File | null>(null);
 
   const selectedGroup = groups.find((g: any) => String(g.id) === groupId);
   const profileId: number = selectedGroup?.profile_id || 1;
   const [p1Id, p2Id] = PROFILE_SUB_IDS[profileId] || [2, 4];
   const activeMonth = entMode === "trial" ? month : examType;
 
+  // Load students for current group (for template + validation)
   useEffect(() => {
-    if (!open) { setRows(null); setFileName(""); setGroupId("all"); }
+    fetchStudents().then((all: any[]) => {
+      setStudents(all);
+    });
+  }, []);
+
+  const groupStudents = useMemo(() =>
+    groupId === "all" ? students : students.filter(s => String(s.group_id) === groupId),
+    [students, groupId]
+  );
+
+  // Known student ID set for validation
+  const knownStudentIds = useMemo(() => new Set(students.map(s => s.id)), [students]);
+
+  useEffect(() => {
+    if (!open) { setRows(null); setFileName(""); setGroupId("all"); setSaveError(null); lastFileRef.current = null; }
   }, [open]);
 
+  // Re-validate rows when knownStudentIds changes (students loaded after file was parsed)
+  useEffect(() => {
+    if (lastFileRef.current && knownStudentIds.size > 0) {
+      parseXlsx(lastFileRef.current);
+    }
+  }, [knownStudentIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const parseXlsx = (file: File) => {
+    lastFileRef.current = file;
     setFileName(file.name);
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -725,6 +752,7 @@ function EntXlsxImportDialog({ open, onOpenChange, groups, groupProfileMap, stud
 
           const errs: string[] = [];
           if (!studentId) errs.push("ID не найден");
+          else if (knownStudentIds.size > 0 && !knownStudentIds.has(studentId)) errs.push(`ID ${studentId} не существует в БД`);
 
           const cells = {
             тарих:   parseCell(colTarikh,  20),
@@ -757,6 +785,7 @@ function EntXlsxImportDialog({ open, onOpenChange, groups, groupProfileMap, stud
   const handleSave = async () => {
     if (!validRows.length || !activeMonth) return;
     setSaving(true);
+    setSaveError(null);
     const scores: { student_id: number; subject_id: number; score: number; month: string }[] = [];
     for (const r of validRows) {
       // Per-student P1/P2 resolution when "all groups" selected
@@ -774,18 +803,22 @@ function EntXlsxImportDialog({ open, onOpenChange, groups, groupProfileMap, stud
       if (r.п1      != null) scores.push({ student_id: r.studentId!, subject_id: rp1Id, score: r.п1,      month: activeMonth });
       if (r.п2      != null) scores.push({ student_id: r.studentId!, subject_id: rp2Id, score: r.п2,      month: activeMonth });
     }
-    await saveEntResultsBatch(scores);
+    const result = await saveEntResultsBatch(scores);
     setSaving(false);
-    onSuccess();
+    if (!result) {
+      setSaveError("Ошибка сохранения. Проверьте ID учеников и повторите попытку.");
+      return;
+    }
+    onSuccess(activeMonth, entMode === "real");
     onOpenChange(false);
   };
 
   const downloadTemplate = () => {
-    const ws = XLSX.utils.aoa_to_sheet([
-      ["id ученика", "тарих", "чтение", "матграм", "п1", "п2", "общий"],
-      [101, 15, 8, 7, 42, 38, ""],
-      [102, 12, 6, 5, 30, 28, ""],
-    ]);
+    const header = ["id ученика", "тарих", "чтение", "матграм", "п1", "п2", "общий"];
+    const dataRows = groupStudents.length > 0
+      ? groupStudents.map(s => [s.id, "", "", "", "", "", ""])
+      : [["<id>", "", "", "", "", "", ""]];
+    const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "ЕНТ Баллы");
     addExcelWatermarkSheet(XLSX, wb);
@@ -799,6 +832,7 @@ function EntXlsxImportDialog({ open, onOpenChange, groups, groupProfileMap, stud
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[92vh] flex flex-col p-0 gap-0">
+        <DialogTitle className="sr-only">Загрузка баллов ЕНТ через XLSX</DialogTitle>
         {/* Header */}
         <div className="px-6 pt-5 pb-4 border-b flex items-start justify-between gap-3">
           <div>
@@ -963,16 +997,23 @@ function EntXlsxImportDialog({ open, onOpenChange, groups, groupProfileMap, stud
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t bg-muted/20 flex items-center justify-between gap-2">
-          <div className="text-xs text-muted-foreground">
-            {rows && <>{validRows.length} из {rows.length} готовы · <strong>{monthLabel}</strong></>}
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Закрыть</Button>
-            <Button size="sm" disabled={saving || validRows.length === 0}
-              onClick={handleSave} className="gap-1.5">
-              {saving ? "Сохранение..." : `Сохранить ${validRows.length} записей`}
-            </Button>
+        <div className="px-6 py-3 border-t bg-muted/20 flex flex-col gap-2">
+          {saveError && (
+            <div className="text-xs text-red-600 bg-red-50 dark:bg-red-950/30 rounded px-3 py-1.5 border border-red-200 dark:border-red-800">
+              ⚠ {saveError}
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs text-muted-foreground">
+              {rows && <>{validRows.length} из {rows.length} готовы · <strong>{monthLabel}</strong></>}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Закрыть</Button>
+              <Button size="sm" disabled={saving || validRows.length === 0}
+                onClick={handleSave} className="gap-1.5">
+                {saving ? "Сохранение..." : `Сохранить ${validRows.length} записей`}
+              </Button>
+            </div>
           </div>
         </div>
       </DialogContent>
@@ -996,6 +1037,7 @@ export default function EntResultsPage() {
   const [chartStudentId, setChartStudentId] = useState("avg");
   const [editStudent, setEditStudent] = useState<{ id: number; full_name: string } | null>(null);
   const [xlsxImportOpen, setXlsxImportOpen] = useState(false);
+  const [realEntImportOpen, setRealEntImportOpen] = useState(false);
 
   // тФАтФА Enhanced filters & sorting тФАтФА
   const [sortColumn, setSortColumn] = useState<string>("total");
@@ -1051,6 +1093,26 @@ export default function EntResultsPage() {
     const ms = new Set<string>(); for (const r of allData) ms.add(r.month);
     return ACADEMIC_MONTHS.filter(m => ms.has(m.value));
   }, [allData]);
+
+  // Available real ENT exam types with data
+  const availableRealExamTypes = useMemo(() => {
+    const ms = new Set<string>(); for (const r of allData) ms.add(r.month);
+    return new Set(REAL_EXAM_TYPES.map(m => m.value).filter(v => ms.has(v)));
+  }, [allData]);
+
+  // Active month list for charts/progress tabs — switches by dataMode
+  const activeMonthsList = useMemo(() =>
+    dataMode === "real"
+      ? REAL_EXAM_TYPES.filter(m => availableRealExamTypes.has(m.value))
+      : availableMonths,
+    [dataMode, availableMonths, availableRealExamTypes]
+  );
+
+  // allData filtered to the current mode's months
+  const modeAllData = useMemo(() => {
+    const active = new Set(activeMonthsList.map(m => m.value));
+    return allData.filter(r => active.has(r.month));
+  }, [allData, activeMonthsList]);
 
   // Previous month key
   const prevMonth = useMemo(() => {
@@ -1156,13 +1218,13 @@ export default function EntResultsPage() {
     // Per student: first total, last total, all month-totals
     const studentMonths: Record<number, Record<string, number>> = {};
     const studentNames: Record<number, string> = {};
-    for (const r of allData) {
+    for (const r of modeAllData) {
       studentNames[r.student_id] = r.student_name;
       if (!studentMonths[r.student_id]) studentMonths[r.student_id] = {};
       if (!studentMonths[r.student_id][r.month]) studentMonths[r.student_id][r.month] = 0;
       studentMonths[r.student_id][r.month] += r.score;
     }
-    const months = availableMonths.map(m => m.value);
+    const months = activeMonthsList.map(m => m.value);
     return Object.entries(studentMonths).map(([sid, mScores]) => {
       const id = parseInt(sid);
       const sortedMonths = months.filter(m => mScores[m] > 0);
@@ -1172,20 +1234,20 @@ export default function EntResultsPage() {
       const monthData = months.map(m => mScores[m] || 0);
       return { id, name: studentNames[id], first, last, growth, monthData, sortedMonths };
     }).sort((a, b) => b.last - a.last);
-  }, [allData, availableMonths]);
+  }, [modeAllData, activeMonthsList]);
 
   // тФАтФАтФАтФА Total chart data тФАтФАтФАтФА
   const chartData = useMemo(() => {
     const studentMonths: Record<string, Record<string, number>> = {};
     const studentNames: Record<number, string> = {};
-    for (const r of allData) {
+    for (const r of modeAllData) {
       studentNames[r.student_id] = r.student_name;
       const sid = String(r.student_id);
       if (!studentMonths[sid]) studentMonths[sid] = {};
       if (!studentMonths[sid][r.month]) studentMonths[sid][r.month] = 0;
       studentMonths[sid][r.month] += r.score;
     }
-    const months = availableMonths.map(m => m.value);
+    const months = activeMonthsList.map(m => m.value);
     const avgByMonth: Record<string, { sum: number; count: number }> = {};
     for (const sid of Object.keys(studentMonths)) for (const m of months) { const t = studentMonths[sid]?.[m] || 0; if (t === 0) continue; if (!avgByMonth[m]) avgByMonth[m] = { sum: 0, count: 0 }; avgByMonth[m].sum += t; avgByMonth[m].count++; }
 
@@ -1204,14 +1266,14 @@ export default function EntResultsPage() {
       if (avgByMonth[m]) pt["╨б╤А╨╡╨┤╨╜╨╕╨╣ ╨┐╨╛ ╨│╤А╤Г╨┐╨┐╨╡"] = Math.round(avgByMonth[m].sum / avgByMonth[m].count);
       return pt;
     });
-  }, [allData, chartStudentId, availableMonths]);
+  }, [modeAllData, chartStudentId, activeMonthsList]);
 
   // Per-subject chart data for individual student
   const subjectChartData = useMemo(() => {
     if (chartStudentId === "avg") return [];
     const sid = parseInt(chartStudentId);
-    const studentData = allData.filter(r => r.student_id === sid);
-    const months = [...new Set(studentData.map(r => r.month))].sort();
+    const studentData = modeAllData.filter(r => r.student_id === sid);
+    const months = activeMonthsList.map(m => m.value).filter(m => studentData.some(r => r.month === m));
     return months.map(m => {
       const point: Record<string, string | number> = { month: MONTH_SHORT[m] || m };
       for (const s of profileSubjects) {
@@ -1220,15 +1282,15 @@ export default function EntResultsPage() {
       }
       return point;
     });
-  }, [allData, chartStudentId, profileSubjects]);
+  }, [modeAllData, activeMonthsList, chartStudentId, profileSubjects]);
 
   // Stacked bar chart data: subjects stacked by month for a student
   const stackedChartData = useMemo(() => {
     if (chartStudentId === "avg") {
       // Average per subject per month across group
-      const months = availableMonths.map(m => m.value);
+      const months = activeMonthsList.map(m => m.value);
       const subjectSums: Record<string, Record<number, { sum: number; count: number }>> = {};
-      for (const r of allData) {
+      for (const r of modeAllData) {
         if (!subjectSums[r.month]) subjectSums[r.month] = {};
         if (!subjectSums[r.month][r.subject_id]) subjectSums[r.month][r.subject_id] = { sum: 0, count: 0 };
         subjectSums[r.month][r.subject_id].sum += r.score;
@@ -1248,8 +1310,8 @@ export default function EntResultsPage() {
       });
     }
     const sid = parseInt(chartStudentId);
-    const studentData = allData.filter(r => r.student_id === sid);
-    const months = [...new Set(studentData.map(r => r.month))].sort();
+    const studentData = modeAllData.filter(r => r.student_id === sid);
+    const months = activeMonthsList.map(m => m.value).filter(m => studentData.some(r => r.month === m));
     return months.map(m => {
       const point: Record<string, string | number> = { month: MONTH_SHORT[m] || m, monthFull: MONTH_LABELS[m] || m };
       let total = 0;
@@ -1262,7 +1324,7 @@ export default function EntResultsPage() {
       point["╨Ш╤В╨╛╨│╨╛"] = total;
       return point;
     });
-  }, [allData, chartStudentId, availableMonths, profileSubjects, isAllGroups]);
+  }, [modeAllData, activeMonthsList, chartStudentId, profileSubjects, isAllGroups]);
 
   // Radar chart data: latest month subject breakdown
   const radarData = useMemo(() => {
@@ -1280,9 +1342,9 @@ export default function EntResultsPage() {
 
   const chartStudentsList = useMemo(() => {
     const names: Record<number, string> = {};
-    for (const r of allData) names[r.student_id] = r.student_name;
+    for (const r of modeAllData) names[r.student_id] = r.student_name;
     return Object.entries(names).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [allData]);
+  }, [modeAllData]);
 
   // ══════ TOPS / LEADERBOARD DATA ══════
 
@@ -1305,18 +1367,18 @@ export default function EntResultsPage() {
 
   // Most improved: compare last two months with data for each student
   const mostImproved = useMemo(() => {
-    // Build per-student per-month totals from allData
+    // Build per-student per-month totals from modeAllData
     const studentMonths: Record<number, Record<string, number>> = {};
     const studentNames: Record<number, string> = {};
     const studentGroups: Record<number, number> = {};
-    for (const r of allData) {
+    for (const r of modeAllData) {
       studentNames[r.student_id] = r.student_name;
       studentGroups[r.student_id] = r.group_id;
       if (!studentMonths[r.student_id]) studentMonths[r.student_id] = {};
       if (!studentMonths[r.student_id][r.month]) studentMonths[r.student_id][r.month] = 0;
       studentMonths[r.student_id][r.month] += r.score;
     }
-    const months = availableMonths.map(m => m.value);
+    const months = activeMonthsList.map(m => m.value);
     return Object.entries(studentMonths)
       .map(([sid, mScores]) => {
         const id = parseInt(sid);
@@ -1331,7 +1393,7 @@ export default function EntResultsPage() {
       .filter((s): s is NonNullable<typeof s> => s !== null && s.growth !== 0)
       .sort((a, b) => b.growth - a.growth)
       .slice(0, 10);
-  }, [allData, availableMonths]);
+  }, [modeAllData, activeMonthsList]);
 
   // Group rankings (average total per group)
   const groupRankings = useMemo(() => {
@@ -1380,13 +1442,13 @@ export default function EntResultsPage() {
   // ══════ SUBJECT ANALYSIS DATA ══════
   const subjectAnalysis = useMemo(() => {
     const displaySubjects = isAllGroups ? MANDATORY_SUBJECTS : profileSubjects;
-    const months = availableMonths.map(m => m.value);
-    if (months.length === 0 || allData.length === 0) return [];
+    const months = activeMonthsList.map(m => m.value);
+    if (months.length === 0 || modeAllData.length === 0) return [];
 
     return displaySubjects.map(subj => {
       // Per-month stats
       const monthlyStats = months.map(m => {
-        const scores = allData.filter(r => r.month === m && r.subject_id === subj.id).map(r => r.score);
+        const scores = modeAllData.filter(r => r.month === m && r.subject_id === subj.id).map(r => r.score);
         if (scores.length === 0) return { month: m, monthShort: MONTH_SHORT[m] || m, monthLabel: MONTH_LABELS[m] || m, avg: 0, max: 0, min: 0, count: 0, pct: 0 };
         const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
         const max = Math.max(...scores);
@@ -1400,7 +1462,7 @@ export default function EntResultsPage() {
       const delta = currentMonthData && prevMonthData ? currentMonthData.avg - prevMonthData.avg : null;
 
       // Score distribution for current month
-      const currentScores = allData.filter(r => r.month === selectedMonth && r.subject_id === subj.id);
+      const currentScores = modeAllData.filter(r => r.month === selectedMonth && r.subject_id === subj.id);
       const dist = [
         { label: `0-${Math.round(subj.max * 0.4) - 1}`, count: 0, color: "#ef4444" },
         { label: `${Math.round(subj.max * 0.4)}-${Math.round(subj.max * 0.6) - 1}`, count: 0, color: "#f97316" },
@@ -1438,7 +1500,7 @@ export default function EntResultsPage() {
         totalStudents: currentScores.length,
       };
     });
-  }, [allData, availableMonths, profileSubjects, isAllGroups, selectedMonth]);
+  }, [modeAllData, activeMonthsList, profileSubjects, isAllGroups, selectedMonth]);
 
   // Profile-specific subjects analysis (for "all groups" mode)
   const profileSubjectAnalysis = useMemo(() => {
@@ -1449,22 +1511,22 @@ export default function EntResultsPage() {
         if (!allProfileSubjects.has(s.id)) allProfileSubjects.set(s.id, s);
       }
     }
-    const months = availableMonths.map(m => m.value);
+    const months = activeMonthsList.map(m => m.value);
     return [...allProfileSubjects.values()].map(subj => {
       const monthlyStats = months.map(m => {
-        const scores = allData.filter(r => r.month === m && r.subject_id === subj.id).map(r => r.score);
+        const scores = modeAllData.filter(r => r.month === m && r.subject_id === subj.id).map(r => r.score);
         if (scores.length === 0) return { month: m, monthShort: MONTH_SHORT[m] || m, monthLabel: MONTH_LABELS[m] || m, avg: 0, max: 0, min: 0, count: 0, pct: 0 };
         const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
         return { month: m, monthShort: MONTH_SHORT[m] || m, monthLabel: MONTH_LABELS[m] || m, avg, max: Math.max(...scores), min: Math.min(...scores), count: scores.length, pct: Math.round(avg / subj.max * 100) };
       }).filter(s => s.count > 0);
-      const currentScores = allData.filter(r => r.month === selectedMonth && r.subject_id === subj.id);
+      const currentScores = modeAllData.filter(r => r.month === selectedMonth && r.subject_id === subj.id);
       const top5 = [...currentScores].sort((a, b) => b.score - a.score).slice(0, 5).map(r => ({ name: r.student_name, score: r.score, group: r.group_name }));
       const currentMonth = monthlyStats.find(m => m.month === selectedMonth) || monthlyStats[monthlyStats.length - 1];
       const prevIdx = monthlyStats.length >= 2 ? monthlyStats.length - 2 : -1;
       const delta = currentMonth && prevIdx >= 0 ? currentMonth.avg - monthlyStats[prevIdx].avg : null;
       return { subject: subj, monthlyStats, currentMonth, delta, top5, totalStudents: currentScores.length };
     });
-  }, [allData, availableMonths, isAllGroups, selectedMonth]);
+  }, [modeAllData, activeMonthsList, isAllGroups, selectedMonth]);
 
   const chartLines = useMemo(() => {
     if (chartStudentId === "avg") return ["Средний балл"];
@@ -1504,9 +1566,9 @@ export default function EntResultsPage() {
             <SelectTrigger className="w-[180px]"><SelectValue placeholder="Направление" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Все направления</SelectItem>
-              <SelectItem value="1">Мат-Инфо</SelectItem>
-              <SelectItem value="2">Мат-Физ</SelectItem>
-              <SelectItem value="3">Био-Хим</SelectItem>
+              <SelectItem value="1">ФМ (Мат-Физ)</SelectItem>
+              <SelectItem value="2">ХБ (Хим-Био)</SelectItem>
+              <SelectItem value="3">ИНФМАТ (Инф-Мат)</SelectItem>
             </SelectContent>
           </Select>
         )}
@@ -1518,7 +1580,13 @@ export default function EntResultsPage() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
-                  onClick={() => setDataMode("training")}
+                  onClick={() => {
+                    setDataMode("training");
+                    if (REAL_EXAM_TYPES.some(t => t.value === selectedMonth)) {
+                      const last = availableMonths[availableMonths.length - 1];
+                      if (last) setSelectedMonth(last.value);
+                    }
+                  }}
                   className={`flex items-center justify-center h-8 w-8 rounded-md border transition-colors ${dataMode === "training" ? "bg-primary text-primary-foreground border-primary" : "hover:bg-muted border-border"}`}
                 >
                   <PenLine className="h-3.5 w-3.5" />
@@ -1529,7 +1597,13 @@ export default function EntResultsPage() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
-                  onClick={() => setDataMode("real")}
+                  onClick={() => {
+                    setDataMode("real");
+                    if (!REAL_EXAM_TYPES.some(t => t.value === selectedMonth)) {
+                      const first = REAL_EXAM_TYPES.find(m => availableRealExamTypes.has(m.value));
+                      if (first) setSelectedMonth(first.value);
+                    }
+                  }}
                   className={`flex items-center justify-center h-8 w-8 rounded-md border transition-colors ${dataMode === "real" ? "bg-primary text-primary-foreground border-primary" : "hover:bg-muted border-border"}`}
                 >
                   <CheckCircle2 className="h-3.5 w-3.5" />
@@ -1539,14 +1613,26 @@ export default function EntResultsPage() {
             </Tooltip>
 
             {isAdmin && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setXlsxImportOpen(true)}>
-                    <Upload className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Загрузить XLSX</TooltipContent>
-              </Tooltip>
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setXlsxImportOpen(true)}>
+                      <Upload className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Загрузить XLSX</TooltipContent>
+                </Tooltip>
+                {dataMode === "real" && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setRealEntImportOpen(true)}>
+                        <PenLine className="h-3.5 w-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Ввести баллы реального ЕНТ (вручную / CSV)</TooltipContent>
+                  </Tooltip>
+                )}
+              </>
             )}
 
             <Tooltip>
@@ -1612,16 +1698,35 @@ export default function EntResultsPage() {
         );
       })()}
 
+      <RealEntImportDialog
+        open={realEntImportOpen}
+        onOpenChange={setRealEntImportOpen}
+        groups={groups}
+        onSuccess={async (savedExamType) => {
+          setSelectedMonth(savedExamType);
+          setDataMode("real");
+          const gid = selectedGroupId === "all" ? undefined : parseInt(selectedGroupId);
+          const [cur, all] = await Promise.all([
+            fetchEntResults(savedExamType, gid),
+            fetchEntResults(undefined, gid),
+          ]);
+          setRawData(cur);
+          setAllData(all);
+        }}
+      />
+
       <EntXlsxImportDialog
         open={xlsxImportOpen}
         onOpenChange={setXlsxImportOpen}
         groups={groups}
         groupProfileMap={groupProfileMap}
         studentGroupMap={studentGroupMap}
-        onSuccess={async () => {
+        onSuccess={async (savedMonth, isReal) => {
+          setSelectedMonth(savedMonth);
+          setDataMode(isReal ? "real" : "training");
           const gid = selectedGroupId === "all" ? undefined : parseInt(selectedGroupId);
           const [cur, all] = await Promise.all([
-            fetchEntResults(selectedMonth, gid),
+            fetchEntResults(savedMonth, gid),
             fetchEntResults(undefined, gid),
           ]);
           setRawData(cur);
@@ -1648,7 +1753,7 @@ export default function EntResultsPage() {
               ))
             ) : (
               REAL_EXAM_TYPES.map(m => {
-                const hasData = availableMonths.some(am => am.value === m.value);
+                const hasData = availableRealExamTypes.has(m.value);
                 return (
                   <Button
                     key={m.value}
@@ -1664,7 +1769,7 @@ export default function EntResultsPage() {
                 );
               })
             )}
-            {dataMode === "real" && availableMonths.length === 0 && (
+            {dataMode === "real" && availableRealExamTypes.size === 0 && (
               <span className="text-sm text-muted-foreground italic">Нет данных реального ЕНТ. Загрузите через кнопку «Добавить».</span>
             )}
           </div>
@@ -2268,13 +2373,13 @@ export default function EntResultsPage() {
                         const h = score > 0 ? Math.max(4, Math.round(score / TOTAL_MAX * 28)) : 0;
                         return (
                           <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
-                            {score > 0 && <div className={`w-full rounded-sm ${getScoreBg(score, TOTAL_MAX)} opacity-80`} style={{ height: h }} title={`${availableMonths[i]?.label || ""}: ${score}`} />}
+                            {score > 0 && <div className={`w-full rounded-sm ${getScoreBg(score, TOTAL_MAX)} opacity-80`} style={{ height: h }} title={`${activeMonthsList[i]?.label || ""}: ${score}`} />}
                           </div>
                         );
                       })}
                     </div>
                     <div className="flex gap-0.5 mt-0.5">
-                      {availableMonths.map((m, i) => (
+                      {activeMonthsList.map((m, i) => (
                         <div key={m.value} className="flex-1 text-center text-[8px] text-muted-foreground">{m.short}</div>
                       ))}
                     </div>
