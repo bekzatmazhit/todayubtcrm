@@ -1,0 +1,3 @@
+# Treat SQLite database files as binary to prevent CRLF corruption on Windows
+*.sqlite binary
+*.sqlite3 binary
