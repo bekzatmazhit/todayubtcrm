@@ -92,10 +92,28 @@
 @layer base {
   * {
     @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    max-width: 100%;
   }
 
   body {
     @apply bg-background text-foreground font-body antialiased;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: pan-y;
+    max-width: 100%;
+  }
+
+  #root {
+    height: 100%;
+    overflow: hidden;
   }
 
   body.crm-bg-solid {

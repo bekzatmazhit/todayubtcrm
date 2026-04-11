@@ -28,10 +28,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <SidebarProvider>
-      <div className="min-h-screen flex w-full">
+      <div className="h-full flex w-full overflow-hidden">
         <AppSidebar onLogout={requestLogout} />
-        <div className="flex-1 flex flex-col min-w-0">
-          <header className="h-12 md:h-14 flex items-center border-b border-border px-3 md:px-4 bg-card">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+          <header className="h-12 md:h-14 flex items-center border-b border-border px-3 md:px-4 bg-card shrink-0">
             <SidebarTrigger className="mr-2 md:mr-4" />
             <div className="flex-1" />
             <div className="flex items-center gap-1.5 md:gap-3">
@@ -52,7 +52,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
           </header>
           <AdminBanner />
-          <main className="flex-1 overflow-auto p-3 md:p-6 pb-20 md:pb-6">
+          <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 p-3 md:p-6 pb-20 md:pb-6" style={{ overscrollBehavior: 'contain' }}>
             {children}
           </main>
         </div>

@@ -37,7 +37,7 @@ export function AdminBanner() {
   if (visible.length === 0) return null;
 
   return (
-    <div className="w-full flex flex-col">
+    <div className="w-full flex flex-col shrink-0">
       {visible.map(banner => {
         const config = TYPE_CONFIG[banner.type] || TYPE_CONFIG.info;
         const Icon = config.icon;

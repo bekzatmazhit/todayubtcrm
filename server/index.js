@@ -74,6 +74,12 @@ app.use(globalLimiter);
 
 initializeDatabase();
 
+// Serve static assets EARLY so JS/CSS load fast (before API routes)
+const distDir = path.join(__dirname, "..", "dist");
+if (fs.existsSync(distDir)) {
+  app.use(express.static(distDir));
+}
+
 // ====================== HELPERS ======================
 
 function logAction(req, { action, entityType, entityId, entityName, details, userId, userName } = {}) {
@@ -3809,17 +3815,6 @@ app.get("/api/reports/group-performance", (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ====================== SPA FALLBACK (production) ======================
-const distDir = path.join(__dirname, "..", "dist");
-if (fs.existsSync(distDir)) {
-  app.use(express.static(distDir));
-  app.use((req, res, next) => {
-    // Don't intercept API routes or uploads
-    if (req.method !== "GET" || req.path.startsWith("/api/") || req.path.startsWith("/uploads/")) return next();
-    res.sendFile(path.join(distDir, "index.html"));
-  });
-}
-
 // ====================== ADMISSION TRACKER ======================
 
 // Universities CRUD
@@ -4011,6 +4006,15 @@ app.post("/api/specialties/bulk", (req, res) => {
     res.json({ inserted: rows.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ====================== SPA FALLBACK (production) ======================
+// Must be LAST — after all API routes — so it only catches unmatched paths
+if (fs.existsSync(distDir)) {
+  app.use((req, res, next) => {
+    if (req.method !== "GET" || req.path.startsWith("/api/") || req.path.startsWith("/uploads/")) return next();
+    res.sendFile(path.join(distDir, "index.html"));
+  });
+}
 
 // ====================== START ======================
 
