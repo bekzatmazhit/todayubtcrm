@@ -339,6 +339,23 @@ export function initializeDatabase() {
   // Migration: drop old unique index (conflicts handled by checkConflicts now)
   try { db.exec(`DROP INDEX IF EXISTS uniq_teacher_slot_cycle`); } catch {}
 
+  // Indexes for performance (idempotent)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_attendance_lesson_id   ON attendance(lesson_id);
+    CREATE INDEX IF NOT EXISTS idx_attendance_student_id  ON attendance(student_id);
+    CREATE INDEX IF NOT EXISTS idx_lessons_schedule_id    ON lessons(schedule_id);
+    CREATE INDEX IF NOT EXISTS idx_lessons_date           ON lessons(date);
+    CREATE INDEX IF NOT EXISTS idx_schedule_teacher_id    ON schedule(teacher_id);
+    CREATE INDEX IF NOT EXISTS idx_schedule_group_id      ON schedule(group_id);
+    CREATE INDEX IF NOT EXISTS idx_students_group_id      ON students(group_id);
+    CREATE INDEX IF NOT EXISTS idx_students_status        ON students(status);
+    CREATE INDEX IF NOT EXISTS idx_ent_results_student_id ON ent_results(student_id);
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_id  ON notifications(user_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_room     ON chat_messages(room);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_user_id      ON audit_log(user_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_assignee_id      ON tasks(assignee_id);
+  `);
+
   // Migration: add custom_label column to schedule if missing
   try { db.exec(`ALTER TABLE schedule ADD COLUMN custom_label TEXT DEFAULT NULL`); } catch {}
 

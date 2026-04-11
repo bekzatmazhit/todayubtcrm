@@ -5,28 +5,30 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { AppLayout } from "@/components/AppLayout";
+import { lazy, Suspense } from "react";
 import Login from "@/pages/Login";
-import CalendarPage from "@/pages/CalendarPage";
-import StudentsPage from "@/pages/StudentsPage";
-import Student360Page from "@/pages/Student360Page";
-import EntResultsPage from "@/pages/EntResultsPage";
-import AdmissionPage from "@/pages/AdmissionPage";
-import CuratorshipPage from "@/pages/CuratorshipPage";
-import TeamPage from "@/pages/TeamPage";
-import TasksPage from "@/pages/TasksPage";
-import StoragePage from "@/pages/StoragePage";
-import SettingsPage from "@/pages/SettingsPage";
-import AdminPage from "@/pages/AdminPage";
-import WikiPage from "@/pages/WikiPage";
-import GradesPage from "@/pages/GradesPage";
-import BroadcastPage from "@/pages/BroadcastPage";
-import ChatPage from "@/pages/ChatPage";
-import DashboardPage from "@/pages/DashboardPage";
-import DocsPage from "@/pages/DocsPage";
-import TeacherAnalyticsPage from "@/pages/TeacherAnalyticsPage";
-import ExportReportsPage from "@/pages/ExportReportsPage";
 import NotFound from "@/pages/NotFound";
 import PublicSchedulePage from "@/pages/PublicSchedulePage";
+
+const CalendarPage        = lazy(() => import("@/pages/CalendarPage"));
+const StudentsPage        = lazy(() => import("@/pages/StudentsPage"));
+const Student360Page      = lazy(() => import("@/pages/Student360Page"));
+const EntResultsPage      = lazy(() => import("@/pages/EntResultsPage"));
+const AdmissionPage       = lazy(() => import("@/pages/AdmissionPage"));
+const CuratorshipPage     = lazy(() => import("@/pages/CuratorshipPage"));
+const TeamPage            = lazy(() => import("@/pages/TeamPage"));
+const TasksPage           = lazy(() => import("@/pages/TasksPage"));
+const StoragePage         = lazy(() => import("@/pages/StoragePage"));
+const SettingsPage        = lazy(() => import("@/pages/SettingsPage"));
+const AdminPage           = lazy(() => import("@/pages/AdminPage"));
+const WikiPage            = lazy(() => import("@/pages/WikiPage"));
+const GradesPage          = lazy(() => import("@/pages/GradesPage"));
+const BroadcastPage       = lazy(() => import("@/pages/BroadcastPage"));
+const ChatPage            = lazy(() => import("@/pages/ChatPage"));
+const DashboardPage       = lazy(() => import("@/pages/DashboardPage"));
+const DocsPage            = lazy(() => import("@/pages/DocsPage"));
+const TeacherAnalyticsPage = lazy(() => import("@/pages/TeacherAnalyticsPage"));
+const ExportReportsPage   = lazy(() => import("@/pages/ExportReportsPage"));
 
 const queryClient = new QueryClient();
 
@@ -50,6 +52,7 @@ const App = () => (
       <Sonner />
       <AuthProvider>
         <BrowserRouter>
+          <Suspense fallback={null}>
           <Routes>
             <Route path="/login" element={<AuthRoute><Login /></AuthRoute>} />
             <Route path="/" element={<ProtectedRoute><CalendarPage /></ProtectedRoute>} />
@@ -74,6 +77,7 @@ const App = () => (
             <Route path="/schedule/:token" element={<PublicSchedulePage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
+          </Suspense>
         </BrowserRouter>
       </AuthProvider>
     </TooltipProvider>

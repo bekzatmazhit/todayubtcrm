@@ -9,6 +9,8 @@ import { fileURLToPath } from "url";
 import sharp from "sharp";
 import { WebSocketServer } from "ws";
 import { initializeDatabase, db } from "./db.js";
+import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsDir = path.join(__dirname, "uploads");
@@ -129,7 +131,9 @@ app.post("/api/login", loginLimiter, (req, res) => {
       FROM users u JOIN roles r ON u.role_id = r.id WHERE u.email = ?
     `).get(email);
 
-    if (!user || user.password !== password) return res.status(401).json({ error: "Invalid email or password" });
+    if (!user) return res.status(401).json({ error: "Invalid email or password" });
+    const passwordValid = user.password && (user.password.startsWith("$2") ? bcrypt.compareSync(password, user.password) : user.password === password);
+    if (!passwordValid) return res.status(401).json({ error: "Invalid email or password" });
 
     logAction(req, { action: "login", entityType: "user", entityId: user.id, entityName: user.name + " " + user.surname, userId: user.id, userName: user.name + " " + user.surname });
     res.json({ id: user.id.toString(), email: user.email, full_name: user.name + " " + user.surname, role: user.role, avatar_url: user.avatar_url || null });
@@ -505,7 +509,7 @@ app.post("/api/schedule/share-token", (req, res) => {
   try {
     const { group_id } = req.body;
     const createdBy = req.user?.id || null;
-    const token = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const token = crypto.randomBytes(32).toString("hex");
     db.prepare(
       "INSERT INTO schedule_share_tokens (token, group_id, created_by) VALUES (?, ?, ?)"
     ).run(token, group_id || null, createdBy);
@@ -1860,7 +1864,8 @@ app.post("/api/users", (req, res) => {
     if (!name || !surname) return res.status(400).json({ error: "name and surname required" });
     const roleMap = { admin: 1, umo_head: 2, teacher: 3 };
     const role_id = roleMap[role] ?? 3;
-    const pwd = password || surname.toLowerCase() + Date.now();
+    const rawPwd = password || surname.toLowerCase() + Date.now();
+    const pwd = bcrypt.hashSync(rawPwd, 10);
     const result = db.prepare(
       "INSERT INTO users (name, surname, phone, email, password, role_id) VALUES (?, ?, ?, ?, ?, ?)"
     ).run(name, surname, phone || null, email || null, pwd, role_id);
@@ -1880,10 +1885,11 @@ app.put("/api/users/:id", (req, res) => {
     if (password) {
       const user = db.prepare("SELECT password FROM users WHERE id = ?").get(req.params.id);
       if (!user) return res.status(404).json({ error: "User not found" });
-      if (current_password && user.password !== current_password) {
-        return res.status(400).json({ error: "Текущий пароль неверный" });
+      if (current_password) {
+        const match = user.password && (user.password.startsWith("$2") ? bcrypt.compareSync(current_password, user.password) : user.password === current_password);
+        if (!match) return res.status(400).json({ error: "Текущий пароль неверный" });
       }
-      db.prepare("UPDATE users SET password = ? WHERE id = ?").run(password, req.params.id);
+      db.prepare("UPDATE users SET password = ? WHERE id = ?").run(bcrypt.hashSync(password, 10), req.params.id);
     }
 
     db.prepare(`
