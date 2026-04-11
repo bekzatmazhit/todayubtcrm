@@ -7,9 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Progress } from "@/components/ui/progress";
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { fetchStudents, fetchGroups, fetchTeacherFeedbackByStudent, fetchLessonCommentsByStudent } from "@/lib/api";
+import { fetchStudentsPaginated, fetchGroups, fetchTeacherFeedbackByStudent, fetchLessonCommentsByStudent } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
 import { UserAvatar } from "@/components/UserAvatar";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatPhone, cn } from "@/lib/utils";
@@ -24,6 +25,8 @@ interface Student {
   status?: string; avatar_url?: string | null;
 }
 type SortKey = "full_name" | "group_name" | "attendance_rate" | "last_ent_score";
+
+const PAGE_SIZE = 50;
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL || "/api";
 
@@ -539,6 +542,10 @@ export default function StudentsPage() {
   const [loading, setLoading] = useState(true);
   const [sortKey, setSortKey] = useState<SortKey>("full_name");
   const [sortAsc, setSortAsc] = useState(true);
+  const { toast } = useToast();
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [debouncedSearch, setDebouncedSearch] = useState("");
 
   // 360 Panel state
   const [panelOpen, setPanelOpen] = useState(false);
@@ -550,16 +557,34 @@ export default function StudentsPage() {
   const [lessonComments, setLessonComments] = useState<any[]>([]);
 
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const [studentsData, groupsData] = await Promise.all([fetchStudents(), fetchGroups()]);
-        setStudents(studentsData);
-        setGroups(groupsData);
-      } catch (error) { console.error("Error loading data:", error); }
-      finally { setLoading(false); }
-    };
-    loadData();
+    fetchGroups().then(setGroups).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchStudentsPaginated({
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
+      search: debouncedSearch || undefined,
+      group_id: selectedGroup !== "all" ? parseInt(selectedGroup) : undefined,
+      sort: sortKey,
+      sort_dir: sortAsc ? "asc" : "desc",
+    }).then(({ students: result, total: t }) => {
+      if (!cancelled) { setStudents(result); setTotal(t); setLoading(false); }
+    }).catch(() => {
+      if (!cancelled) {
+        toast({ title: "Ошибка загрузки учеников", variant: "destructive" });
+        setLoading(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [page, debouncedSearch, selectedGroup, sortKey, sortAsc]);
 
   // Handle command palette focus=search action
   useEffect(() => {
@@ -605,32 +630,10 @@ export default function StudentsPage() {
     });
   }, [panelMonth, panelOpen, panelStudentId]);
 
-  const filteredStudents = useMemo(() => {
-    let result = students.filter((student) => {
-      const matchesSearch = student.full_name.toLowerCase().includes(search.toLowerCase());
-      const matchesGroup = selectedGroup === "all" || student.group_id?.toString() === selectedGroup;
-      return matchesSearch && matchesGroup;
-    });
-    result.sort((a, b) => {
-      let av: any = a[sortKey] ?? "";
-      let bv: any = b[sortKey] ?? "";
-      if (typeof av === "number" && typeof bv === "number") return sortAsc ? av - bv : bv - av;
-      if (av === null || av === undefined) av = "";
-      if (bv === null || bv === undefined) bv = "";
-      return sortAsc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
-    });
-    return result;
-  }, [students, search, selectedGroup, sortKey, sortAsc]);
-
-  const stats = useMemo(() => {
-    const total = students.length;
-    const groupCounts = groups.map(g => ({ ...g, count: students.filter(s => s.group_id === g.id).length }));
-    return { total, groupCounts };
-  }, [students, groups]);
-
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortAsc(!sortAsc);
     else { setSortKey(key); setSortAsc(true); }
+    setPage(0);
   };
 
   const rateColor = (rate: number | null | undefined) => {
@@ -655,17 +658,17 @@ export default function StudentsPage() {
     <div>
       {/* Group pills */}
       <div className="flex flex-wrap gap-2 mb-4">
-        {stats.groupCounts.map(g => (
+        {groups.map(g => (
           <button key={g.id}
-            onClick={() => setSelectedGroup(selectedGroup === g.id.toString() ? "all" : g.id.toString())}
+            onClick={() => { setSelectedGroup(selectedGroup === g.id.toString() ? "all" : g.id.toString()); setPage(0); }}
             className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
               selectedGroup === g.id.toString() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
             }`}>
-            {g.name} ({g.count})
+            {g.name}
           </button>
         ))}
         {selectedGroup !== "all" && (
-          <button onClick={() => setSelectedGroup("all")} className="px-3 py-1 rounded-full text-xs font-medium bg-destructive/10 text-destructive hover:bg-destructive/20">
+          <button onClick={() => { setSelectedGroup("all"); setPage(0); }} className="px-3 py-1 rounded-full text-xs font-medium bg-destructive/10 text-destructive hover:bg-destructive/20">
             Сбросить
           </button>
         )}
@@ -675,9 +678,9 @@ export default function StudentsPage() {
       <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 mb-4">
         <div className="relative flex-1 sm:max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input ref={searchInputRef} placeholder="Поиск по имени..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+          <Input ref={searchInputRef} placeholder="Поиск по имени..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} className="pl-9" />
         </div>
-        <Select value={selectedGroup} onValueChange={setSelectedGroup}>
+        <Select value={selectedGroup} onValueChange={(v) => { setSelectedGroup(v); setPage(0); }}>
           <SelectTrigger className="w-full sm:w-48">
             <Filter className="h-4 w-4 mr-2" /><SelectValue placeholder="Все группы" />
           </SelectTrigger>
@@ -718,7 +721,7 @@ export default function StudentsPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredStudents.map((student) => (
+              {students.map((student) => (
                 <tr key={student.id}
                   onClick={() => openPanel(student.id)}
                   className="border-b hover:bg-muted/30 cursor-pointer transition-colors">
@@ -750,7 +753,7 @@ export default function StudentsPage() {
             </tbody>
           </table>
         </div>
-        {filteredStudents.length === 0 && (
+        {!loading && students.length === 0 && (
           <div className="text-center py-12 text-muted-foreground">
             <Users className="h-10 w-10 mx-auto mb-2 opacity-30" />
             <p className="text-sm">Ученики не найдены</p>
@@ -758,7 +761,15 @@ export default function StudentsPage() {
         )}
       </Card>
 
-      <p className="text-xs text-muted-foreground mt-2 text-right">Показано {filteredStudents.length} из {students.length}</p>
+      <div className="flex items-center justify-between mt-3 px-1">
+        <p className="text-xs text-muted-foreground">
+          {total > 0 ? `Показано ${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)} из ${total}` : ""}
+        </p>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setPage(p => p - 1)} disabled={page === 0 || loading}>Назад</Button>
+          <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={(page + 1) * PAGE_SIZE >= total || loading}>Вперёд</Button>
+        </div>
+      </div>
 
       {/* ── 360 PANEL (Sheet) ── */}
       <Sheet open={panelOpen} onOpenChange={setPanelOpen}>

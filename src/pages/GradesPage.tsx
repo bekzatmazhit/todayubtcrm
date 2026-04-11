@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ClipboardCheck, Search, ChevronDown, ChevronUp, FileText, Users, TrendingUp } from "lucide-react";
 import { fetchQuizzes, fetchGroups, fetchSubjects } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
 
 interface QuizResult { student_id: number; score: number | null; student_name: string }
 interface Quiz {
@@ -19,6 +20,7 @@ interface Quiz {
 
 export default function GradesPage() {
   const { t } = useTranslation();
+  const { toast } = useToast();
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [groups, setGroups] = useState<{ id: number; name: string }[]>([]);
   const [subjects, setSubjects] = useState<{ id: number; name: string }[]>([]);
@@ -31,6 +33,7 @@ export default function GradesPage() {
   useEffect(() => {
     Promise.all([fetchQuizzes(), fetchGroups(), fetchSubjects()])
       .then(([q, g, s]) => { setQuizzes(q); setGroups(g); setSubjects(s); })
+      .catch(() => { toast({ title: "Ошибка загрузки данных", variant: "destructive" }); })
       .finally(() => setLoading(false));
   }, []);
 

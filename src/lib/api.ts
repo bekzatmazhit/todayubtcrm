@@ -320,6 +320,28 @@ export async function fetchStudents() {
   }
 }
 
+export async function fetchStudentsPaginated(params: {
+  limit: number;
+  offset: number;
+  search?: string;
+  status?: string;
+  group_id?: number;
+  sort?: string;
+  sort_dir?: string;
+}): Promise<{ students: any[]; total: number }> {
+  const q = new URLSearchParams();
+  q.set("limit", String(params.limit));
+  q.set("offset", String(params.offset));
+  if (params.search) q.set("search", params.search);
+  if (params.status) q.set("status", params.status);
+  if (params.group_id) q.set("group_id", String(params.group_id));
+  if (params.sort) q.set("sort", params.sort);
+  if (params.sort_dir) q.set("sort_dir", params.sort_dir);
+  const res = await fetch(`${API_BASE}/students?${q}`, defaultOptions);
+  if (!res.ok) throw new Error("Failed to fetch students");
+  return res.json();
+}
+
 export async function fetchStudent(id: string) {
   try {
     const res = await fetch(`${API_BASE}/students/${id}`, defaultOptions);

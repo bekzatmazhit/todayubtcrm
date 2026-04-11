@@ -3,7 +3,8 @@ import { BarChart3, Users, TrendingUp, TrendingDown, AlertTriangle, UserX } from
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { fetchAttendanceStats, fetchGroups, fetchStudents } from "@/lib/api";
+import { fetchAttendanceStats, fetchGroups } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line,
@@ -12,9 +13,9 @@ import {
 const COLORS = ["#6366f1", "#ef4444", "#f59e0b", "#10b981", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316"];
 
 export default function DashboardPage() {
+  const { toast } = useToast();
   const [stats, setStats] = useState<any>(null);
   const [groups, setGroups] = useState<any[]>([]);
-  const [students, setStudents] = useState<any[]>([]);
   const [months, setMonths] = useState("6");
   const [loading, setLoading] = useState(true);
 
@@ -23,12 +24,12 @@ export default function DashboardPage() {
     Promise.all([
       fetchAttendanceStats(parseInt(months)),
       fetchGroups(),
-      fetchStudents(),
-    ]).then(([s, g, st]) => {
+    ]).then(([s, g]) => {
       setStats(s);
       setGroups(g);
-      setStudents(st);
-    }).catch(() => {}).finally(() => setLoading(false));
+    }).catch(() => {
+      toast({ title: "Ошибка загрузки данных", variant: "destructive" });
+    }).finally(() => setLoading(false));
   }, [months]);
 
   if (loading) {
@@ -124,7 +125,7 @@ export default function DashboardPage() {
               <Users className="h-6 w-6 text-white" />
             </div>
             <div>
-              <p className="text-2xl font-bold">{students.filter((s: any) => s.status === 'active').length}</p>
+              <p className="text-2xl font-bold">{stats?.active_student_count ?? 0}</p>
               <p className="text-sm text-muted-foreground">Активных студентов</p>
             </div>
           </CardContent>

@@ -767,13 +767,29 @@ app.get("/api/lessons", (req, res) => {
 
 app.get("/api/students", (req, res) => {
   try {
-    const students = db.prepare(`
+    const { limit, offset = "0", search, status, group_id, sort = "full_name", sort_dir = "asc" } = req.query;
+    const ALLOWED_SORTS = { full_name: "s.full_name", group_name: "g.name", attendance_rate: "attendance_rate", last_ent_score: "last_ent_score" };
+    const sortCol = ALLOWED_SORTS[sort] || "s.full_name";
+    const dir = sort_dir === "desc" ? "DESC" : "ASC";
+    const conditions = [];
+    const params = [];
+    if (search) { conditions.push("s.full_name LIKE ?"); params.push(`%${search}%`); }
+    if (status) { conditions.push("s.status = ?"); params.push(status); }
+    if (group_id) { conditions.push("s.group_id = ?"); params.push(parseInt(group_id)); }
+    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+    const baseSelect = `
       SELECT s.id, s.full_name, s.phone, s.parent_phone, s.parent_name, s.group_id, s.status, g.name as group_name,
         (SELECT ROUND(AVG(CASE WHEN a.status='present' THEN 1.0 ELSE 0.0 END)*100,1) FROM attendance a WHERE a.student_id = s.id) as attendance_rate,
         (SELECT SUM(e.score) FROM ent_results e WHERE e.student_id = s.id AND e.month = (SELECT MAX(e2.month) FROM ent_results e2 WHERE e2.student_id = s.id)) as last_ent_score
-      FROM students s LEFT JOIN groups g ON s.group_id = g.id ORDER BY s.full_name
-    `).all();
-    res.json(students);
+      FROM students s LEFT JOIN groups g ON s.group_id = g.id
+      ${where}
+      ORDER BY ${sortCol} ${dir} NULLS LAST`;
+    if (limit !== undefined) {
+      const { cnt } = db.prepare(`SELECT COUNT(*) as cnt FROM students s LEFT JOIN groups g ON s.group_id = g.id ${where}`).get(...params);
+      const students = db.prepare(`${baseSelect} LIMIT ? OFFSET ?`).all(...params, parseInt(limit), parseInt(offset));
+      return res.json({ students, total: cnt });
+    }
+    res.json(db.prepare(baseSelect).all(...params));
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -3512,11 +3528,12 @@ app.get("/api/dashboard/attendance-stats", (req, res) => {
       LIMIT 10
     `).all(parseInt(months));
 
-    res.json({ byGroup: stats, overall, topAbsent });
+    const { cnt: active_student_count } = db.prepare("SELECT COUNT(*) as cnt FROM students WHERE status = 'active'").get();
+    res.json({ byGroup: stats, overall, topAbsent, active_student_count });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ====================== PERMISSIONS ======================
+// ====================== PERMISSIONS =======================
 
 app.get("/api/permissions", (req, res) => {
   try {

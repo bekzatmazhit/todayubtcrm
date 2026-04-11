@@ -1,6 +1,5 @@
 const CACHE_NAME = 'today-crm-v5';
 const API_CACHE_NAME = 'today-api-v2';
-const API_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 // API routes to cache for offline schedule access
 const API_CACHEABLE = ['/api/lessons', '/api/time-slots', '/api/groups', '/api/subjects', '/api/users'];
 const STATIC_ASSETS = [
@@ -78,15 +77,10 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(async () => {
-          // Offline: try API cache with TTL check
+          // Offline: return stale cache if available (any age), only fallback to [] if never cached
           const cache = await caches.open(API_CACHE_NAME);
-          const tsResponse = await cache.match(request.url + '__ts');
-          if (tsResponse) {
-            const ts = parseInt(await tsResponse.text(), 10);
-            if (Date.now() - ts < API_CACHE_TTL_MS) {
-              return cache.match(request) || new Response('[]', { headers: { 'Content-Type': 'application/json' } });
-            }
-          }
+          const cached = await cache.match(request);
+          if (cached) return cached;
           return new Response('[]', { headers: { 'Content-Type': 'application/json' } });
         })
     );
