@@ -540,6 +540,7 @@ export default function StudentsPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetching, setFetching] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("full_name");
   const [sortAsc, setSortAsc] = useState(true);
   const { toast } = useToast();
@@ -567,7 +568,8 @@ export default function StudentsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    const isInitial = students.length === 0;
+    if (isInitial) setLoading(true); else setFetching(true);
     fetchStudentsPaginated({
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
@@ -576,11 +578,11 @@ export default function StudentsPage() {
       sort: sortKey,
       sort_dir: sortAsc ? "asc" : "desc",
     }).then(({ students: result, total: t }) => {
-      if (!cancelled) { setStudents(Array.isArray(result) ? result : []); setTotal(t ?? 0); setLoading(false); }
+      if (!cancelled) { setStudents(Array.isArray(result) ? result : []); setTotal(t ?? 0); setLoading(false); setFetching(false); }
     }).catch(() => {
       if (!cancelled) {
         toast({ title: "Ошибка загрузки учеников", variant: "destructive" });
-        setLoading(false);
+        setLoading(false); setFetching(false);
       }
     });
     return () => { cancelled = true; };
@@ -696,7 +698,7 @@ export default function StudentsPage() {
       </div>
 
       {/* Students Table */}
-      <Card>
+      <Card className={fetching ? "opacity-60 pointer-events-none" : ""}>
         <div className="overflow-auto">
           <table className="w-full">
             <thead>
@@ -763,11 +765,11 @@ export default function StudentsPage() {
 
       <div className="flex items-center justify-between mt-3 px-1">
         <p className="text-xs text-muted-foreground">
-          {total > 0 ? `Показано ${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)} из ${total}` : ""}
+          {total > 0 ? `Стр. ${page + 1} из ${Math.ceil(total / PAGE_SIZE)} • всего ${total}` : ""}
         </p>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setPage(p => p - 1)} disabled={page === 0 || loading}>Назад</Button>
-          <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={(page + 1) * PAGE_SIZE >= total || loading}>Вперёд</Button>
+          <Button variant="outline" size="sm" onClick={() => setPage(p => p - 1)} disabled={page === 0 || fetching}>Назад</Button>
+          <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={(page + 1) * PAGE_SIZE >= total || fetching}>Вперёд</Button>
         </div>
       </div>
 
