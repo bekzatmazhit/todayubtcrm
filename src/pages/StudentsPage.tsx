@@ -26,7 +26,7 @@ interface Student {
 }
 type SortKey = "full_name" | "group_name" | "attendance_rate" | "last_ent_score";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 25;
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL || "/api";
 
