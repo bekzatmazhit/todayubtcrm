@@ -339,7 +339,10 @@ export async function fetchStudentsPaginated(params: {
   if (params.sort_dir) q.set("sort_dir", params.sort_dir);
   const res = await fetch(`${API_BASE}/students?${q}`, defaultOptions);
   if (!res.ok) throw new Error("Failed to fetch students");
-  return res.json();
+  const data = await res.json();
+  // Handle both {students,total} (new) and plain array (old/fallback) formats
+  if (Array.isArray(data)) return { students: data, total: data.length };
+  return { students: Array.isArray(data.students) ? data.students : [], total: data.total ?? 0 };
 }
 
 export async function fetchStudent(id: string) {

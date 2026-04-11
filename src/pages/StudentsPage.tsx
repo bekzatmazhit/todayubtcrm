@@ -576,7 +576,7 @@ export default function StudentsPage() {
       sort: sortKey,
       sort_dir: sortAsc ? "asc" : "desc",
     }).then(({ students: result, total: t }) => {
-      if (!cancelled) { setStudents(result); setTotal(t); setLoading(false); }
+      if (!cancelled) { setStudents(Array.isArray(result) ? result : []); setTotal(t ?? 0); setLoading(false); }
     }).catch(() => {
       if (!cancelled) {
         toast({ title: "Ошибка загрузки учеников", variant: "destructive" });

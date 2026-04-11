@@ -783,7 +783,7 @@ app.get("/api/students", (req, res) => {
         (SELECT SUM(e.score) FROM ent_results e WHERE e.student_id = s.id AND e.month = (SELECT MAX(e2.month) FROM ent_results e2 WHERE e2.student_id = s.id)) as last_ent_score
       FROM students s LEFT JOIN groups g ON s.group_id = g.id
       ${where}
-      ORDER BY ${sortCol} ${dir} NULLS LAST`;
+      ORDER BY ${sortCol} ${dir}`;
     if (limit !== undefined) {
       const { cnt } = db.prepare(`SELECT COUNT(*) as cnt FROM students s LEFT JOIN groups g ON s.group_id = g.id ${where}`).get(...params);
       const students = db.prepare(`${baseSelect} LIMIT ? OFFSET ?`).all(...params, parseInt(limit), parseInt(offset));
