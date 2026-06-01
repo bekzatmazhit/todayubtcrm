@@ -20,7 +20,8 @@ import {
 } from "lucide-react";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 
-const API = (import.meta as any).env?.VITE_API_URL || "/api";
+const rawApiBase = (import.meta as any).env?.VITE_API_URL;
+const API = rawApiBase ? rawApiBase.replace(/\/$/, "") : "/api";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 

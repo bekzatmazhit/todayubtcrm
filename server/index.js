@@ -46,14 +46,20 @@ app.use(helmet({
   crossOriginResourcePolicy: false, // чтобы не ломать отдачу файлов/аватарок
 }));
 
-// CORS: отражаем Origin (localhost или ваш IP), без credentials
-// Можно задать список через CLIENT_ORIGIN, CLIENT_ORIGIN_EXTRA (через запятую)
-const allowedOriginsEnv = process.env.CLIENT_ORIGIN || "http://localhost:8080";
-const extraOriginsEnv = process.env.CLIENT_ORIGIN_EXTRA || "";
+// CORS: отражаем Origin, без credentials.
+// Если CLIENT_ORIGIN не задан, то разрешаем запросы с любых origin.
+const allowedOriginsEnv = process.env.CLIENT_ORIGIN?.trim() || "";
+const extraOriginsEnv = process.env.CLIENT_ORIGIN_EXTRA?.trim() || "";
 const allowedOrigins = [
   ...allowedOriginsEnv.split(",").map(o => o.trim()).filter(Boolean),
   ...extraOriginsEnv.split(",").map(o => o.trim()).filter(Boolean),
 ];
+
+if (allowedOrigins.length === 0) {
+  console.log("CORS: CLIENT_ORIGIN не задан, разрешены все origin");
+} else {
+  console.log("CORS: разрешены origin", allowedOrigins);
+}
 
 app.use(cors({
   origin: (origin, cb) => {
