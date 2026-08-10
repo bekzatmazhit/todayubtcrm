@@ -59,12 +59,26 @@ const CHART_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#3b82f6", "#8
 function getWhatsAppLink(phone: string | null | undefined, studentName: string, groupName: string): string | null {
   if (!phone) return null;
   const clean = phone.replace(/\D/g, "");
-  const withCountry = clean.startsWith("7") ? clean : "7" + clean;
-  const msg = encodeURIComponent(
-    `Здравствуйте! Я куратор группы ${groupName} в образовательном центре TODAY. Хотел(а) обсудить успеваемость вашего ребёнка ${studentName}.`
-  );
-  return `https://wa.me/${withCountry}?text=${msg}`;
+  if (!clean) return null;
+  const text = encodeURIComponent(`Здравствуйте! Это куратор группы ${groupName}. Пишу по поводу ученика ${studentName}.`);
+  return `https://wa.me/${clean}?text=${text}`;
 }
+
+const generateMonthOptions = () => {
+  const options = [];
+  const date = new Date();
+  date.setDate(1); 
+  date.setMonth(date.getMonth() - 6); 
+
+  for (let i = 0; i < 9; i++) { 
+    const val = date.toISOString().slice(0, 7);
+    const label = date.toLocaleString('ru-RU', { month: 'long', year: 'numeric' });
+    options.push({ value: val, label: label.charAt(0).toUpperCase() + label.slice(1) });
+    date.setMonth(date.getMonth() + 1);
+  }
+  return options.reverse();
+};
+const MONTH_OPTIONS = generateMonthOptions();
 
 function transformEntHistory(history: { month: string; score: number; subject_name: string }[]) {
   const months = [...new Set(history.map((h) => h.month))].sort();
@@ -658,6 +672,9 @@ export default function CuratorshipPage() {
 
   // Admin teacher feedback summary
   const [adminTeacherFbSummary, setAdminTeacherFbSummary] = useState<any>(null);
+  const [expandedTeacherId, setExpandedTeacherId] = useState<number | null>(null);
+  const [teacherFbDetails, setTeacherFbDetails] = useState<Record<number, any>>({});
+  const [teacherFbDetailsLoading, setTeacherFbDetailsLoading] = useState<number | null>(null);
 
   const curatorId = user ? parseInt(user.id) : 0;
   const isAdmin = user?.role === "admin" || user?.role === "umo_head";
@@ -840,12 +857,16 @@ export default function CuratorshipPage() {
             <TabsContent value="calls">
               <div className="flex items-center gap-3 mb-5">
                 <Label className="text-sm">Месяц:</Label>
-                <Input
-                  type="month"
-                  value={adminCallMonth}
-                  onChange={(e) => setAdminCallMonth(e.target.value)}
-                  className="w-44 h-8"
-                />
+                <Select value={adminCallMonth} onValueChange={setAdminCallMonth}>
+                  <SelectTrigger className="w-48 h-8">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MONTH_OPTIONS.map(m => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               {!adminCallSummary ? (
@@ -964,12 +985,16 @@ export default function CuratorshipPage() {
             <TabsContent value="teacher-fb">
               <div className="flex items-center gap-3 mb-5">
                 <Label className="text-sm">Месяц:</Label>
-                <Input
-                  type="month"
-                  value={adminCallMonth}
-                  onChange={(e) => setAdminCallMonth(e.target.value)}
-                  className="w-44 h-8"
-                />
+                <Select value={adminCallMonth} onValueChange={setAdminCallMonth}>
+                  <SelectTrigger className="w-48 h-8">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MONTH_OPTIONS.map(m => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               {!adminTeacherFbSummary ? (
@@ -991,10 +1016,30 @@ export default function CuratorshipPage() {
                             <div>
                               <p className="font-semibold text-sm">{t.teacher_name}</p>
                             </div>
-                            <div className="text-right">
+                            <div className="flex items-center gap-2">
                               <Badge variant={isDone ? "default" : "outline"} className={isDone ? "bg-green-600" : ""}>
                                 {t.completed_tasks}/{t.total_tasks}
                               </Badge>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={async () => {
+                                  if (expandedTeacherId === t.teacher_id) {
+                                    setExpandedTeacherId(null);
+                                    return;
+                                  }
+                                  setExpandedTeacherId(t.teacher_id);
+                                  if (!teacherFbDetails[t.teacher_id]) {
+                                    setTeacherFbDetailsLoading(t.teacher_id);
+                                    const data = await fetchTeacherFeedback(t.teacher_id, adminCallMonth);
+                                    setTeacherFbDetails(prev => ({ ...prev, [t.teacher_id]: data }));
+                                    setTeacherFbDetailsLoading(null);
+                                  }
+                                }}
+                              >
+                                {expandedTeacherId === t.teacher_id ? "Свернуть" : "Подробнее"}
+                              </Button>
                             </div>
                           </div>
                           <Progress value={pct} className="h-2" />
@@ -1010,6 +1055,45 @@ export default function CuratorshipPage() {
                               </span>
                             )}
                           </div>
+                          {expandedTeacherId === t.teacher_id && (
+                            <div className="mt-3 border-t pt-3">
+                              {teacherFbDetailsLoading === t.teacher_id ? (
+                                <div className="text-xs text-muted-foreground py-2 text-center">Загрузка...</div>
+                              ) : teacherFbDetails[t.teacher_id]?.tasks?.length ? (
+                                <div className="space-y-1.5">
+                                  {teacherFbDetails[t.teacher_id].tasks.map((task: any) => {
+                                    const hasComment = task.comment && task.comment.trim().length > 0;
+                                    return (
+                                      <div
+                                        key={task.id}
+                                        className={`flex items-start gap-2 p-2 rounded-md text-xs ${hasComment ? "bg-green-50 dark:bg-green-900/20" : "bg-muted/40"}`}
+                                      >
+                                        <div className="mt-0.5 shrink-0">
+                                          {hasComment
+                                            ? <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+                                            : <Circle className="h-3.5 w-3.5 text-muted-foreground" />}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <p className="font-medium">{task.full_name}</p>
+                                          <div className="flex items-center gap-2 mt-0.5">
+                                            <Badge variant="outline" className="text-[10px]">{task.subject_name}</Badge>
+                                            {task.group_name && <span className="text-[10px] text-muted-foreground">{task.group_name}</span>}
+                                          </div>
+                                          {hasComment && (
+                                            <p className="text-muted-foreground mt-1 bg-background/50 p-1.5 rounded line-clamp-2">
+                                              {task.comment}
+                                            </p>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-muted-foreground text-center py-2">Нет данных</p>
+                              )}
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
                     );
@@ -1299,7 +1383,12 @@ export default function CuratorshipPage() {
                           <UserAvatar user={s} size="sm" />
                           {s.full_name}
                         </TableCell>
-                        <TableCell><Badge variant="outline" className="text-xs">{s.group_name}</Badge></TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-xs flex w-max items-center gap-1.5 px-2 py-0.5">
+                            <GroupPersonAvatar groupName={s.group_name} avatarUrl={s.group_avatar} size={14} showTooltip={false} />
+                            {s.group_name}
+                          </Badge>
+                        </TableCell>
                         <TableCell>
                           {s.last_ent_score != null ? (
                             <span className={`font-semibold text-sm ${
@@ -1412,7 +1501,12 @@ export default function CuratorshipPage() {
                                 {t.full_name}
                               </span>
                             </TableCell>
-                            <TableCell><Badge variant="outline" className="text-xs">{t.group_name}</Badge></TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className="text-xs flex w-max items-center gap-1.5 px-2 py-0.5">
+                                <GroupPersonAvatar groupName={t.group_name} avatarUrl={t.group_avatar} size={14} showTooltip={false} />
+                                {t.group_name}
+                              </Badge>
+                            </TableCell>
                             <TableCell className="text-sm">{t.parent_name || <span className="text-muted-foreground text-xs">—</span>}</TableCell>
                             <TableCell className="text-sm">{t.parent_phone ? formatPhone(t.parent_phone) : <span className="text-muted-foreground text-xs">—</span>}</TableCell>
                             <TableCell>
@@ -1486,7 +1580,7 @@ export default function CuratorshipPage() {
                   <SelectTrigger className="w-40"><SelectValue placeholder="Группа" /></SelectTrigger>
                   <SelectContent>
                     {groups.map((g: any) => (
-                      <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>
+                      <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} avatarUrl={g.avatar_url} size={18} showTooltip={false} />{g.name}</span></SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

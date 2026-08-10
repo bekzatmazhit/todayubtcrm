@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { CheckCircle2, XCircle, Clock, BookOpen, BookX, BookMarked, Save, UserPl
 import { Lesson, Student } from "@/data/mockSchedule";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-import { fetchAttendanceByScheduleDate, updateAttendance, fetchStudents, createStudent, archiveStudent, updateStudent, createQuiz } from "@/lib/api";
+import { fetchAttendanceByScheduleDate, updateAttendance, fetchStudents, createStudent, archiveStudent, updateStudent, createQuiz, fetchQuizzes } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 
@@ -84,6 +84,25 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
         if (!rec) return s;
         return { ...s, attendance: (rec.status as any) || s.attendance, lateness: (rec.lateness as any) || s.lateness, homework: (rec.homework as any) || s.homework, comment: rec.comment ?? "" };
       }));
+
+      try {
+        const quizzes = await fetchQuizzes({ schedule_id: scheduleId, date: dateStr });
+        if (cancelled) return;
+        if (quizzes && quizzes.length > 0) {
+          const q = quizzes[0];
+          setQuizTitle(q.title || "");
+          const sq: Record<string, string> = {};
+          if (q.results) {
+            q.results.forEach((r: any) => {
+              sq[`s-${r.student_id}`] = r.score !== null ? String(r.score) : "";
+            });
+          }
+          setQuizScores(sq);
+          setShowQuizPanel(true);
+        }
+      } catch (err) {
+        console.error("Failed to fetch quizzes", err);
+      }
     })();
     return () => { cancelled = true; };
   }, [lesson?.id, open, date]);
@@ -234,6 +253,7 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
   const currentStudentIds = new Set(students.map(s => s.id));
   const filteredAddList = allStudents
     .filter(s => {
+      if (s.status === "archived") return false;
       if (currentStudentIds.has(`s-${s.id}`)) return false;
       if (!addStudentSearch) return true;
       return s.full_name.toLowerCase().includes(addStudentSearch.toLowerCase()) || (s.group_name || "").toLowerCase().includes(addStudentSearch.toLowerCase());
@@ -244,42 +264,41 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-[95vw] md:max-w-4xl max-h-[90vh] overflow-auto">
-          <DialogHeader>
-            <DialogTitle className="font-heading text-xl">{t("Class Management")}</DialogTitle>
-          </DialogHeader>
-
-          {/* Badges */}
-          <div className="flex flex-wrap gap-2">
-            <Badge variant="default" className="flex items-center gap-1.5">
-              <GroupPersonAvatar groupName={lesson.group_name} size={16} showTooltip={false} />
-              {lesson.group_name}
-            </Badge>
-            <Badge variant="secondary">{lesson.subject}</Badge>
-            <Badge variant="outline">{lesson.room}</Badge>
-            <Badge variant="outline">{lesson.time_slot}</Badge>
-          </div>
-
-          {/* Top action buttons + stats */}
-          <div className="flex flex-wrap items-center justify-between gap-2 py-1">
-            <div className="flex flex-wrap gap-2">
+          <DialogHeader className="flex flex-row items-center justify-between pr-8">
+            <DialogTitle className="font-heading text-xl mt-1.5">{t("Class Management")}</DialogTitle>
+            <div className="flex items-center gap-2">
               <Button
-                variant={showAddStudent ? "default" : "outline"}
+                variant={showAddStudent ? "secondary" : "outline"}
                 size="sm"
                 onClick={() => { setShowAddStudent(v => !v); setShowQuizPanel(false); }}
               >
-                <UserPlus className="h-4 w-4 mr-1.5" />
-                Добавить ученика
+                <UserPlus className="h-4 w-4 sm:mr-1.5" />
+                <span className="hidden sm:inline">Добавить ученика</span>
               </Button>
               <Button
-                variant={showQuizPanel ? "default" : "outline"}
+                variant={showQuizPanel ? "secondary" : "outline"}
                 size="sm"
                 onClick={() => { setShowQuizPanel(v => !v); setShowAddStudent(false); }}
               >
-                <ClipboardList className="h-4 w-4 mr-1.5" />
-                Контрольный тест
+                <ClipboardList className="h-4 w-4 sm:mr-1.5" />
+                <span className="hidden sm:inline">Контрольный тест</span>
               </Button>
             </div>
-            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          </DialogHeader>
+
+          {/* Badges and Stats row */}
+          <div className="flex flex-wrap items-center justify-between gap-4 py-1">
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="default" className="flex items-center gap-1.5">
+                <GroupPersonAvatar groupName={lesson.group_name} avatarUrl={lesson.group_avatar} size={16} showTooltip={false} />
+                {lesson.group_name}
+              </Badge>
+              <Badge variant="secondary">{lesson.subject}</Badge>
+              <Badge variant="outline">{lesson.room}</Badge>
+              <Badge variant="outline">{lesson.time_slot}</Badge>
+            </div>
+            
+            <div className="flex items-center gap-3 text-sm text-muted-foreground bg-muted/30 px-3 py-1.5 rounded-full border">
               <span className="flex items-center gap-1">
                 <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                 <span className="font-semibold text-foreground">{presentCount}</span>
@@ -288,7 +307,7 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
                 <XCircle className="h-4 w-4 text-red-500" />
                 <span className="font-semibold text-foreground">{absentCount}</span>
               </span>
-              <span className="text-xs">{t("Total")}: <strong>{students.length}</strong></span>
+              <span className="text-xs ml-1 border-l pl-3">{t("Total")}: <strong className="text-foreground">{students.length}</strong></span>
             </div>
           </div>
 
@@ -322,7 +341,12 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
                     {filteredAddList.map((s) => (
                       <button key={s.id} onClick={() => addExtraStudent(s)} className="w-full text-left px-3 py-2 rounded-md hover:bg-muted text-sm flex items-center justify-between">
                         <span>{s.full_name}</span>
-                        {s.group_name && <Badge variant="outline" className="text-xs">{s.group_name}</Badge>}
+                        {s.group_name && (
+                          <Badge variant="outline" className="text-xs flex w-max items-center gap-1.5 px-2 py-0.5">
+                            <GroupPersonAvatar groupName={s.group_name} avatarUrl={s.group_avatar} size={14} showTooltip={false} />
+                            {s.group_name}
+                          </Badge>
+                        )}
                       </button>
                     ))}
                   </div>

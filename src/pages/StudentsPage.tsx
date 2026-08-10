@@ -1,4 +1,4 @@
-import { Users, Filter, Calendar, BookOpen, Search, Phone, GraduationCap, ArrowUpDown, MessageSquare, CheckCircle2, XCircle, Clock, BookX, Star, FileDown, BarChart3 } from "lucide-react";
+import { Users, Filter, Calendar, BookOpen, Search, Phone, GraduationCap, ArrowUpDown, MessageSquare, CheckCircle2, XCircle, Clock, BookX, Star, FileDown, BarChart3, Plus, Upload, UserPlus, Archive } from "lucide-react";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -7,9 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Progress } from "@/components/ui/progress";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Label } from "@/components/ui/label";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
-import { fetchStudentsPaginated, fetchGroups, fetchTeacherFeedbackByStudent, fetchLessonCommentsByStudent } from "@/lib/api";
+import { useSearchParams, useNavigate } from "react-router-dom";
+import { fetchStudentsPaginated, fetchGroups, fetchTeacherFeedbackByStudent, fetchLessonCommentsByStudent, bulkArchiveStudents, bulkImportStudents, addStudent } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { UserAvatar } from "@/components/UserAvatar";
 import { useAuth } from "@/contexts/AuthContext";
@@ -17,12 +20,14 @@ import { formatPhone, cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import * as XLSX from "xlsx";
+import { BulkImportModal } from "@/components/BulkImportModal";
 
 interface Group { id: number; name: string; curator_id?: number }
 interface Student {
   id: number; full_name: string; phone?: string; parent_phone?: string; parent_name?: string;
   group_id?: number; group_name?: string; attendance_rate?: number | null; last_ent_score?: number | null;
-  status?: string; avatar_url?: string | null;
+  status?: string; avatar_url?: string | null; graduation_year?: string | null;
 }
 type SortKey = "full_name" | "group_name" | "attendance_rate" | "last_ent_score";
 
@@ -30,13 +35,21 @@ const PAGE_SIZE = 25;
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL || "/api";
 
-const MONTH_OPTIONS = [
-  { value: "2025-09", label: "Сент 2025" }, { value: "2025-10", label: "Окт 2025" },
-  { value: "2025-11", label: "Нояб 2025" }, { value: "2025-12", label: "Дек 2025" },
-  { value: "2026-01", label: "Янв 2026" }, { value: "2026-02", label: "Фев 2026" },
-  { value: "2026-03", label: "Март 2026" }, { value: "2026-04", label: "Апр 2026" },
-  { value: "2026-05", label: "Май 2026" },
-];
+function generateMonthOptions() {
+  const RU_MONTHS = ["Янв","Фев","Март","Апр","Май","Июнь","Июль","Авг","Сент","Окт","Нояб","Дек"];
+  const now = new Date();
+  const opts: { value: string; label: string }[] = [];
+  // From September of previous year up to current month + 2
+  const start = new Date(now.getFullYear() - 1, 8, 1); // Sep prev year
+  const end   = new Date(now.getFullYear(), now.getMonth() + 2, 1);
+  for (let d = new Date(start); d < end; d.setMonth(d.getMonth() + 1)) {
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    opts.push({ value: `${y}-${String(m + 1).padStart(2, "0")}`, label: `${RU_MONTHS[m]} ${y}` });
+  }
+  return opts;
+}
+const MONTH_OPTIONS = generateMonthOptions();
 
 async function fetchStudent360(id: number) {
   const token = localStorage.getItem("token");
@@ -55,8 +68,8 @@ function getMonthRange(month: string) {
 }
 
 /* ═══════ 360 PANEL ═══════ */
-function Student360Panel({ data, month, teacherFeedback, lessonComments, loading }: {
-  data: any; month: string; teacherFeedback: any[]; lessonComments: any[]; loading: boolean;
+function Student360Panel({ data, month, teacherFeedback, lessonComments, loading, onOpenFull }: {
+  data: any; month: string; teacherFeedback: any[]; lessonComments: any[]; loading: boolean; onOpenFull?: () => void;
 }) {
   const [avatarError, setAvatarError] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -289,51 +302,66 @@ function Student360Panel({ data, month, teacherFeedback, lessonComments, loading
     } finally { setExporting(false); }
   };
 
-  return (
-    <div className="space-y-5">
-      {/* ── FIXED STUDENT HEADER ── */}
-      <div className="flex gap-3 items-start">
-        <div className="relative shrink-0">
-          {s.avatar_url && !avatarError ? (
-            <img src={s.avatar_url} alt="" onError={() => setAvatarError(true)}
-              className="w-14 h-14 rounded-xl object-cover ring-2 ring-border shadow-sm" />
-          ) : (
-            <div className="w-14 h-14 rounded-xl bg-muted flex items-center justify-center text-lg font-bold text-muted-foreground ring-1 ring-border">
-              {initials}
-            </div>
-          )}
-          <span className={cn("absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-background",
-            s.status === "active" ? "bg-emerald-500" : "bg-amber-500")} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <h2 className="text-base font-bold text-foreground leading-tight truncate">{s.full_name}</h2>
-          <div className="flex flex-wrap items-center gap-1.5 mt-1">
-            {s.group?.name && <Badge variant="secondary" className="text-[10px]">{s.group.name}</Badge>}
-            {s.group?.profileName && <Badge variant="outline" className="text-[10px]">{s.group.profileName}</Badge>}
-            <span className="text-[10px] text-muted-foreground">ID: {s.id}</span>
-          </div>
-          <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1.5 text-[11px] text-muted-foreground">
-            {s.phone && <a href={`tel:${s.phone}`} className="flex items-center gap-1 hover:text-foreground"><Phone className="h-3 w-3" />{formatPhone(s.phone)}</a>}
-            {s.parentPhone && <span className="flex items-center gap-1"><Phone className="h-3 w-3 text-amber-500" />{s.parentName || "Родитель"}: {formatPhone(s.parentPhone)}</span>}
-          </div>
-          {s.group?.curatorName && <p className="text-[10px] text-muted-foreground mt-0.5"><Star className="h-2.5 w-2.5 inline text-amber-400 mr-0.5" />Куратор: {s.group.curatorName}</p>}
+  const isAllEmpty = monthTotal === 0 && (!entMonth || entMonth.subjects?.length === 0) && lessonComments.length === 0 && teacherFeedback.length === 0;
 
-          {/* Quick actions */}
-          <div className="flex gap-1.5 mt-2">
-            {s.parentPhone && (
-              <Button variant="outline" size="sm" className="h-6 px-2 text-[10px] gap-1"
-                onClick={() => window.open(`https://wa.me/${s.parentPhone.replace(/\D/g, "")}`, "_blank")}>
-                <MessageSquare className="h-3 w-3 text-emerald-500" /> WhatsApp
-              </Button>
-            )}
-            {s.parentPhone && (
-              <Button variant="outline" size="sm" className="h-6 px-2 text-[10px] gap-1"
-                onClick={() => window.open(`tel:${s.parentPhone}`)}>
-                <Phone className="h-3 w-3" /> Позвонить
-              </Button>
-            )}
+  return (
+    <div className="space-y-4 pb-6">
+      {/* ── FIXED STUDENT HEADER ── */}
+      <div className="bg-card border border-border/50 rounded-2xl p-4 shadow-sm relative overflow-hidden">
+        {/* Subtle decorative background gradient */}
+        <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
+        
+        <div className="flex gap-4 items-start relative z-10">
+          <div className="relative shrink-0">
+            <UserAvatar 
+              user={s} 
+              size="lg" 
+              className="rounded-2xl ring-2 ring-background shadow-sm [&>span]:rounded-2xl [&_img]:rounded-2xl" 
+            />
+            <span className={cn("absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-card shadow-sm",
+              s.status === "active" ? "bg-emerald-500" : "bg-amber-500")} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-lg font-bold text-foreground leading-tight truncate">{s.full_name}</h2>
+            <div className="flex flex-wrap items-center gap-2 mt-1.5">
+              {s.group?.name && <Badge variant="secondary" className="text-[10px] bg-secondary/60 hover:bg-secondary/80">{s.group.name}</Badge>}
+              {s.group?.profileName && <Badge variant="outline" className="text-[10px] border-primary/20 text-primary/80">{s.group.profileName}</Badge>}
+              <span className="text-[10px] text-muted-foreground font-medium bg-muted/50 px-1.5 py-0.5 rounded-md">ID: {s.id}</span>
+            </div>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-1 gap-x-3 mt-2 text-[11px] text-muted-foreground font-medium">
+              {s.phone && <a href={`tel:${s.phone}`} className="flex items-center gap-1.5 hover:text-foreground transition-colors"><Phone className="h-3 w-3 text-primary/60" />{formatPhone(s.phone)}</a>}
+              {s.parentPhone && <span className="flex items-center gap-1.5"><Phone className="h-3 w-3 text-amber-500/80" />{s.parentName || "Родитель"}: {formatPhone(s.parentPhone)}</span>}
+            </div>
+            {s.group?.curatorName && <p className="text-[11px] text-muted-foreground mt-1 font-medium"><Star className="h-3 w-3 inline text-amber-400 mr-1 pb-0.5" />Куратор: {s.group.curatorName}</p>}
           </div>
         </div>
+
+        {/* Quick actions */}
+        <div className="flex flex-wrap gap-2 mt-4 relative z-10 pt-3 border-t border-border/40">
+          {s.parentPhone && (
+            <Button variant="outline" size="sm" className="h-7 px-3 text-[11px] gap-1.5 rounded-lg bg-background/50 backdrop-blur-sm"
+              onClick={() => window.open(`https://wa.me/${s.parentPhone.replace(/\D/g, "")}`, "_blank")}>
+              <MessageSquare className="h-3.5 w-3.5 text-emerald-500" /> WhatsApp
+            </Button>
+          )}
+          {s.parentPhone && (
+            <Button variant="outline" size="sm" className="h-7 px-3 text-[11px] gap-1.5 rounded-lg bg-background/50 backdrop-blur-sm"
+              onClick={() => window.open(`tel:${s.parentPhone}`)}>
+              <Phone className="h-3.5 w-3.5 text-blue-500" /> Звонок
+            </Button>
+          )}
+          <Button variant="secondary" size="sm" className="h-7 px-3 text-[11px] gap-1.5 rounded-lg ml-auto hover:bg-primary/15 hover:text-primary transition-colors" onClick={exportPDF} disabled={exporting}>
+            <FileDown className="h-3.5 w-3.5" /> {exporting ? "..." : "PDF"}
+          </Button>
+        </div>
+        
+        {onOpenFull && (
+          <Button size="sm" className="w-full mt-2 h-8 text-[11px] font-bold tracking-wide gap-1.5 bg-primary/10 text-primary hover:bg-primary/20 rounded-lg shadow-none"
+            onClick={onOpenFull}>
+            <GraduationCap className="h-4 w-4" /> ОТКРЫТЬ ПОЛНЫЙ ПРОФИЛЬ
+          </Button>
+        )}
       </div>
 
       {/* ── KPI ROW ── */}
@@ -343,184 +371,192 @@ function Student360Panel({ data, month, teacherFeedback, lessonComments, loading
         <MiniStat label="ДЗ" value={monthHwRate !== null ? `${monthHwRate}%` : "—"} accent={monthHwRate === null ? "default" : monthHwRate >= 85 ? "green" : monthHwRate >= 60 ? "amber" : "red"} />
       </div>
 
-      {/* ── MONTHLY SUMMARY STATS ── */}
-      <PanelSection title={`Сводка за ${monthLabel}`} icon={<BarChart3 className="h-3.5 w-3.5" />}>
-        {monthTotal > 0 ? (
-          <div className="space-y-3">
-            {/* Attendance breakdown */}
-            <div className="rounded-lg border p-3 space-y-2">
-              <div className="flex items-center gap-1.5 mb-1">
-                <Calendar className="h-3 w-3 text-muted-foreground" />
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Посещение</span>
-                <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">{monthTotal} уроков</span>
-              </div>
-              <div className="flex gap-1 h-2.5 rounded-full overflow-hidden bg-muted">
-                {monthPresent > 0 && <div className="bg-emerald-500 transition-all" style={{ width: `${monthPresent / monthTotal * 100}%` }} />}
-                {monthLate > 0 && <div className="bg-amber-500 transition-all" style={{ width: `${monthLate / monthTotal * 100}%` }} />}
-                {monthAbsent > 0 && <div className="bg-red-500 transition-all" style={{ width: `${monthAbsent / monthTotal * 100}%` }} />}
-              </div>
-              <div className="grid grid-cols-3 gap-1 text-center">
-                <div className="rounded-md bg-emerald-500/10 py-1.5">
-                  <div className="text-sm font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">{monthPresent}</div>
-                  <div className="text-[9px] text-muted-foreground">Присутствовал</div>
+      {isAllEmpty ? (
+        <div className="flex flex-col items-center justify-center py-10 px-4 bg-muted/20 border border-border/40 rounded-2xl border-dashed">
+          <Calendar className="h-10 w-10 text-muted-foreground/30 mb-3" />
+          <p className="text-sm font-medium text-muted-foreground text-center">Нет данных за этот месяц</p>
+          <p className="text-xs text-muted-foreground/60 text-center mt-1">Выберите другой месяц в верхнем меню</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {/* ── MONTHLY SUMMARY STATS ── */}
+          <PanelSection title={`Сводка за ${monthLabel}`} icon={<BarChart3 className="h-4 w-4" />} empty={monthTotal === 0}>
+            <div className="space-y-3">
+              {/* Attendance breakdown */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Посещение</span>
+                  <span className="ml-auto text-[10px] font-semibold bg-muted px-1.5 py-0.5 rounded text-muted-foreground">{monthTotal} уроков</span>
                 </div>
-                <div className="rounded-md bg-amber-500/10 py-1.5">
-                  <div className="text-sm font-bold text-amber-600 dark:text-amber-400 tabular-nums">{monthLate}</div>
-                  <div className="text-[9px] text-muted-foreground">Опоздания</div>
+                <div className="flex gap-0.5 h-3 rounded-full overflow-hidden bg-muted/50 p-0.5">
+                  {monthPresent > 0 && <div className="bg-emerald-500 rounded-full transition-all" style={{ width: `${monthPresent / monthTotal * 100}%` }} />}
+                  {monthLate > 0 && <div className="bg-amber-500 rounded-full transition-all" style={{ width: `${monthLate / monthTotal * 100}%` }} />}
+                  {monthAbsent > 0 && <div className="bg-red-500 rounded-full transition-all" style={{ width: `${monthAbsent / monthTotal * 100}%` }} />}
                 </div>
-                <div className="rounded-md bg-red-500/10 py-1.5">
-                  <div className="text-sm font-bold text-red-600 dark:text-red-400 tabular-nums">{monthAbsent}</div>
-                  <div className="text-[9px] text-muted-foreground">Отсутствовал</div>
+                <div className="grid grid-cols-3 gap-2 text-center pt-1">
+                  <div>
+                    <div className="text-sm font-black text-emerald-600 dark:text-emerald-400 tabular-nums">{monthPresent}</div>
+                    <div className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">Присутствовал</div>
+                  </div>
+                  <div>
+                    <div className="text-sm font-black text-amber-600 dark:text-amber-400 tabular-nums">{monthLate}</div>
+                    <div className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">Опоздания</div>
+                  </div>
+                  <div>
+                    <div className="text-sm font-black text-red-600 dark:text-red-400 tabular-nums">{monthAbsent}</div>
+                    <div className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">Отсутствовал</div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="h-px bg-border/50 w-full" />
+              
+              {/* Homework breakdown */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Домашнее задание</span>
+                </div>
+                <div className="flex gap-0.5 h-3 rounded-full overflow-hidden bg-muted/50 p-0.5">
+                  {monthHwDone > 0 && <div className="bg-emerald-500 rounded-full transition-all" style={{ width: `${monthHwDone / monthTotal * 100}%` }} />}
+                  {monthHwPartial > 0 && <div className="bg-amber-500 rounded-full transition-all" style={{ width: `${monthHwPartial / monthTotal * 100}%` }} />}
+                  {monthHwNotDone > 0 && <div className="bg-red-500/60 rounded-full transition-all" style={{ width: `${monthHwNotDone / monthTotal * 100}%` }} />}
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center pt-1">
+                  <div>
+                    <div className="text-sm font-black text-emerald-600 dark:text-emerald-400 tabular-nums">{monthHwDone}</div>
+                    <div className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">Выполнено</div>
+                  </div>
+                  <div>
+                    <div className="text-sm font-black text-amber-600 dark:text-amber-400 tabular-nums">{monthHwPartial}</div>
+                    <div className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">Частично</div>
+                  </div>
+                  <div>
+                    <div className="text-sm font-black text-red-600/70 dark:text-red-400/70 tabular-nums">{monthHwNotDone}</div>
+                    <div className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">Не сделано</div>
+                  </div>
                 </div>
               </div>
             </div>
-            {/* Homework breakdown */}
-            <div className="rounded-lg border p-3 space-y-2">
-              <div className="flex items-center gap-1.5 mb-1">
-                <BookOpen className="h-3 w-3 text-muted-foreground" />
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Домашнее задание</span>
-              </div>
-              <div className="flex gap-1 h-2.5 rounded-full overflow-hidden bg-muted">
-                {monthHwDone > 0 && <div className="bg-emerald-500 transition-all" style={{ width: `${monthHwDone / monthTotal * 100}%` }} />}
-                {monthHwPartial > 0 && <div className="bg-amber-500 transition-all" style={{ width: `${monthHwPartial / monthTotal * 100}%` }} />}
-                {monthHwNotDone > 0 && <div className="bg-red-500/60 transition-all" style={{ width: `${monthHwNotDone / monthTotal * 100}%` }} />}
-              </div>
-              <div className="grid grid-cols-3 gap-1 text-center">
-                <div className="rounded-md bg-emerald-500/10 py-1.5">
-                  <div className="text-sm font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">{monthHwDone}</div>
-                  <div className="text-[9px] text-muted-foreground">Выполнено</div>
+          </PanelSection>
+
+          {/* ── ENT SCORES FOR MONTH ── */}
+          <PanelSection title="Баллы ЕНТ" icon={<GraduationCap className="h-4 w-4" />} empty={!entMonth || entMonth.subjects?.length === 0}>
+            <div className="space-y-1.5">
+              {entMonth?.subjects?.map((sub: any, i: number) => (
+                <div key={i} className="flex items-center justify-between text-sm py-1.5 px-3 rounded-lg bg-muted/30 border border-transparent hover:border-border/50 transition-colors">
+                  <span className="text-xs font-medium truncate max-w-[160px]">{sub.name}</span>
+                  <span className="font-bold text-sm tabular-nums">{sub.score}</span>
                 </div>
-                <div className="rounded-md bg-amber-500/10 py-1.5">
-                  <div className="text-sm font-bold text-amber-600 dark:text-amber-400 tabular-nums">{monthHwPartial}</div>
-                  <div className="text-[9px] text-muted-foreground">Частично</div>
-                </div>
-                <div className="rounded-md bg-red-500/10 py-1.5">
-                  <div className="text-sm font-bold text-red-600/70 dark:text-red-400/70 tabular-nums">{monthHwNotDone}</div>
-                  <div className="text-[9px] text-muted-foreground">Не сделано</div>
-                </div>
+              ))}
+              <div className="flex items-center justify-between text-sm py-2 px-3 mt-2 rounded-lg bg-primary/5 border border-primary/10">
+                <span className="text-xs font-bold uppercase tracking-wider text-primary">Итого</span>
+                <span className="font-black tabular-nums text-primary text-base">{entMonth?.total}</span>
               </div>
             </div>
-          </div>
-        ) : <EmptyState text="Нет данных за этот месяц" />}
-      </PanelSection>
+          </PanelSection>
 
-      {/* ── EXPORT PDF BUTTON ── */}
-      <Button variant="outline" className="w-full gap-2" onClick={exportPDF} disabled={exporting}>
-        <FileDown className="h-4 w-4" /> {exporting ? "Генерация PDF..." : "Экспорт PDF"}
-      </Button>
-
-      {/* ── ENT SCORES FOR MONTH ── */}
-      <PanelSection title="Баллы ЕНТ" icon={<GraduationCap className="h-3.5 w-3.5" />}>
-        {entMonth && entMonth.subjects?.length > 0 ? (
-          <div className="space-y-1.5">
-            {entMonth.subjects.map((sub: any, i: number) => (
-              <div key={i} className="flex items-center justify-between text-sm py-1 px-2 rounded-md bg-muted/40">
-                <span className="text-xs truncate max-w-[160px]">{sub.name}</span>
-                <span className="font-bold text-sm tabular-nums">{sub.score}</span>
-              </div>
-            ))}
-            <div className="flex items-center justify-between text-sm py-1.5 px-2 rounded-md bg-primary/10 font-semibold">
-              <span className="text-xs">Итого</span>
-              <span className="font-black tabular-nums">{entMonth.total}</span>
+          {/* ── LESSON NOTES ── */}
+          <PanelSection title="Заметки уроков" icon={<MessageSquare className="h-4 w-4" />} empty={lessonComments.length === 0}>
+            <div className="space-y-2">
+              {lessonComments.map((c: any, i: number) => (
+                <div key={i} className="p-3 rounded-xl border border-border/40 bg-muted/20 text-xs space-y-1.5 relative overflow-hidden group hover:border-primary/20 hover:bg-muted/40 transition-colors">
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary/40 rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <div className="flex items-center flex-wrap gap-2 text-muted-foreground">
+                    <span className="tabular-nums font-semibold text-foreground/70">{c.date}</span>
+                    <div className="flex gap-1.5 ml-auto">
+                      {c.teacher_name && <Badge variant="outline" className="text-[9px] h-4 px-1.5 bg-background">{c.teacher_name}</Badge>}
+                      {c.subject_name && <Badge variant="secondary" className="text-[9px] h-4 px-1.5">{c.subject_name}</Badge>}
+                    </div>
+                  </div>
+                  <p className="text-foreground leading-relaxed whitespace-pre-wrap">{c.comment}</p>
+                </div>
+              ))}
             </div>
-          </div>
-        ) : <EmptyState text="Нет данных ЕНТ за этот месяц" />}
-      </PanelSection>
+          </PanelSection>
 
-      {/* ── LESSON NOTES ── */}
-      <PanelSection title="Заметки уроков" icon={<MessageSquare className="h-3.5 w-3.5" />}>
-        {lessonComments.length > 0 ? (
-          <div className="space-y-1.5">
-            {lessonComments.map((c: any, i: number) => (
-              <div key={i} className="p-2 rounded-md border border-border/60 text-xs space-y-0.5">
-                <div className="flex items-center gap-1.5 text-muted-foreground">
-                  <span className="tabular-nums">{c.date}</span>
-                  {c.teacher_name && <Badge variant="outline" className="text-[9px] h-4 px-1">{c.teacher_name}</Badge>}
-                  {c.subject_name && <Badge variant="secondary" className="text-[9px] h-4 px-1">{c.subject_name}</Badge>}
+          {/* ── TEACHER FEEDBACK ── */}
+          <PanelSection title="Обратная связь учителей" icon={<Star className="h-4 w-4" />} empty={teacherFeedback.length === 0}>
+            <div className="space-y-2">
+              {teacherFeedback.map((f: any, i: number) => (
+                <div key={i} className="p-3 rounded-xl border border-border/40 bg-muted/20 text-xs space-y-1.5 relative overflow-hidden group hover:border-amber-500/20 hover:bg-muted/40 transition-colors">
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500/40 rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <div className="flex items-center gap-2">
+                    <div className="w-5 h-5 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-[10px] shrink-0">
+                      {f.teacher_name.charAt(0)}
+                    </div>
+                    <span className="font-semibold text-foreground">{f.teacher_name}</span>
+                    {f.subject_name && <Badge variant="outline" className="text-[9px] h-4 px-1.5 ml-auto bg-background">{f.subject_name}</Badge>}
+                  </div>
+                  <p className="text-foreground/90 italic pl-7">&ldquo;{f.comment}&rdquo;</p>
                 </div>
-                <p className="text-foreground whitespace-pre-wrap">{c.comment}</p>
-              </div>
-            ))}
-          </div>
-        ) : <EmptyState text="Нет заметок за этот месяц" />}
-      </PanelSection>
+              ))}
+            </div>
+          </PanelSection>
 
-      {/* ── TEACHER FEEDBACK ── */}
-      <PanelSection title="Обратная связь учителей" icon={<Star className="h-3.5 w-3.5" />}>
-        {teacherFeedback.length > 0 ? (
-          <div className="space-y-1.5">
-            {teacherFeedback.map((f: any, i: number) => (
-              <div key={i} className="p-2 rounded-md border border-border/60 text-xs space-y-0.5">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-semibold text-foreground">{f.teacher_name}</span>
-                  {f.subject_name && <Badge variant="outline" className="text-[9px] h-4 px-1">{f.subject_name}</Badge>}
+          {/* ── ATTENDANCE TABLE ── */}
+          <PanelSection title="Табель посещения" icon={<Calendar className="h-4 w-4" />} count={monthTotal > 0 ? `${monthPresent}/${monthTotal}` : undefined} empty={monthTotal === 0}>
+            <div className="space-y-1">
+              {monthRecords.map((r: any, i: number) => (
+                <div key={i} className="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-muted/50 text-xs transition-colors border border-transparent hover:border-border/50">
+                  <span className="w-10 shrink-0 font-medium text-foreground/80 tabular-nums">{r.date?.slice(5)}</span>
+                  <div className="bg-background rounded-full p-0.5 shadow-sm border border-border/30">
+                    {r.status === "present" ? (
+                      r.lateness === "late" ? <Clock className="h-4 w-4 text-amber-500 shrink-0" /> : <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                    ) : <XCircle className="h-4 w-4 text-red-500 shrink-0" />}
+                  </div>
+                  <span className="flex-1 truncate font-semibold text-foreground/90">{r.subject ?? "—"}</span>
+                  {r.teacher && <span className="text-[10px] font-medium bg-muted/60 px-1.5 py-0.5 rounded text-muted-foreground truncate max-w-[80px]">{r.teacher}</span>}
                 </div>
-                <p className="text-muted-foreground italic">&ldquo;{f.comment}&rdquo;</p>
-              </div>
-            ))}
-          </div>
-        ) : <EmptyState text="Нет отзывов за этот месяц" />}
-      </PanelSection>
+              ))}
+            </div>
+          </PanelSection>
 
-      {/* ── ATTENDANCE TABLE ── */}
-      <PanelSection title="Табель посещения" icon={<Calendar className="h-3.5 w-3.5" />} count={monthTotal > 0 ? `${monthPresent}/${monthTotal}` : undefined}>
-        {monthTotal > 0 ? (
-          <div className="space-y-0.5">
-            {monthRecords.map((r: any, i: number) => (
-              <div key={i} className="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/40 text-xs transition-colors">
-                <span className="w-14 shrink-0 text-muted-foreground tabular-nums">{r.date?.slice(5)}</span>
-                {r.status === "present" ? (
-                  r.lateness === "late" ? <Clock className="h-3.5 w-3.5 text-amber-500 shrink-0" /> : <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                ) : <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />}
-                <span className="flex-1 truncate font-medium">{r.subject ?? "—"}</span>
-                {r.teacher && <span className="text-[10px] text-muted-foreground truncate max-w-[60px]">{r.teacher}</span>}
-              </div>
-            ))}
-            {monthLate > 0 && <p className="text-[10px] text-amber-600 mt-1 px-2">Опозданий: {monthLate}</p>}
-          </div>
-        ) : <EmptyState text="Нет данных о посещении за этот месяц" />}
-      </PanelSection>
-
-      {/* ── HOMEWORK TABLE ── */}
-      <PanelSection title="Табель ДЗ" icon={<BookOpen className="h-3.5 w-3.5" />} count={monthTotal > 0 ? `${monthHwDone}/${monthTotal}` : undefined}>
-        {monthTotal > 0 ? (
-          <div className="space-y-0.5">
-            {monthRecords.map((r: any, i: number) => (
-              <div key={i} className="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/40 text-xs transition-colors">
-                <span className="w-14 shrink-0 text-muted-foreground tabular-nums">{r.date?.slice(5)}</span>
-                {r.homework === "done" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                  : r.homework === "partial" ? <Clock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                  : <BookX className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />}
-                <span className="flex-1 truncate font-medium">{r.subject ?? "—"}</span>
-                {r.comment && <span className="text-[10px] text-muted-foreground truncate max-w-[80px]" title={r.comment}>💬</span>}
-              </div>
-            ))}
-          </div>
-        ) : <EmptyState text="Нет данных о ДЗ за этот месяц" />}
-      </PanelSection>
+          {/* ── HOMEWORK TABLE ── */}
+          <PanelSection title="Табель ДЗ" icon={<BookOpen className="h-4 w-4" />} count={monthTotal > 0 ? `${monthHwDone}/${monthTotal}` : undefined} empty={monthTotal === 0}>
+            <div className="space-y-1">
+              {monthRecords.map((r: any, i: number) => (
+                <div key={i} className="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-muted/50 text-xs transition-colors border border-transparent hover:border-border/50">
+                  <span className="w-10 shrink-0 font-medium text-foreground/80 tabular-nums">{r.date?.slice(5)}</span>
+                  <div className="bg-background rounded-full p-0.5 shadow-sm border border-border/30">
+                    {r.homework === "done" ? <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                      : r.homework === "partial" ? <Clock className="h-4 w-4 text-amber-500 shrink-0" />
+                      : <BookX className="h-4 w-4 text-muted-foreground/50 shrink-0" />}
+                  </div>
+                  <span className="flex-1 truncate font-semibold text-foreground/90">{r.subject ?? "—"}</span>
+                  {r.comment && <span className="text-[12px] opacity-80 cursor-help transition-opacity hover:opacity-100" title={r.comment}>💬</span>}
+                </div>
+              ))}
+            </div>
+          </PanelSection>
+        </div>
+      )}
     </div>
   );
 }
 
-function PanelSection({ title, icon, children, count }: { title: string; icon: React.ReactNode; children: React.ReactNode; count?: string }) {
+function PanelSection({ title, icon, children, count, empty }: { title: string; icon: React.ReactNode; children: React.ReactNode; count?: string; empty?: boolean }) {
+  if (empty) return null;
   return (
-    <div>
-      <div className="flex items-center gap-1.5 mb-2">
-        <span className="text-muted-foreground">{icon}</span>
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
-        {count && <span className="ml-auto text-[10px] font-medium text-muted-foreground tabular-nums">{count}</span>}
+    <div className="bg-card border border-border/40 shadow-sm rounded-2xl overflow-hidden group hover:border-border/80 transition-colors">
+      <div className="flex items-center gap-2.5 px-4 py-3 bg-muted/20 border-b border-border/30">
+        <div className="p-1.5 rounded-lg bg-background shadow-sm text-foreground/70 ring-1 ring-border/50 group-hover:text-primary group-hover:ring-primary/30 transition-all">{icon}</div>
+        <h3 className="text-[11px] font-black uppercase tracking-widest text-foreground/80">{title}</h3>
+        {count && <Badge variant="secondary" className="ml-auto text-[10px] h-5.5 font-bold bg-background shadow-sm border-border/50">{count}</Badge>}
       </div>
-      {children}
+      <div className="p-4">
+        {children}
+      </div>
     </div>
   );
 }
 
 function MiniStat({ label, value, accent }: { label: string; value: string; accent: "green" | "red" | "amber" | "blue" | "default" }) {
-  const cls = { default: "text-muted-foreground", green: "text-emerald-600 dark:text-emerald-400", red: "text-red-600 dark:text-red-400", amber: "text-amber-600 dark:text-amber-400", blue: "text-blue-600 dark:text-blue-400" }[accent];
+  const cls = { default: "text-muted-foreground", green: "text-emerald-600 dark:text-emerald-500", red: "text-red-600 dark:text-red-500", amber: "text-amber-600 dark:text-amber-500", blue: "text-blue-600 dark:text-blue-500" }[accent];
+  const bg = { default: "bg-muted/30", green: "bg-emerald-500/10 border-emerald-500/20", red: "bg-red-500/10 border-red-500/20", amber: "bg-amber-500/10 border-amber-500/20", blue: "bg-blue-500/10 border-blue-500/20" }[accent];
   return (
-    <div className="rounded-lg border p-2.5 text-center">
-      <div className={cn("text-lg font-bold tabular-nums leading-none", cls)}>{value}</div>
-      <div className="text-[9px] text-muted-foreground uppercase tracking-wider mt-1">{label}</div>
+    <div className={cn("rounded-2xl border p-3 flex flex-col items-center justify-center gap-1.5 transition-colors shadow-sm", bg, accent === 'default' ? 'border-border/40' : '')}>
+      <div className={cn("text-2xl font-black tabular-nums leading-none tracking-tight", cls)}>{value}</div>
+      <div className="text-[10px] text-foreground/60 uppercase font-bold tracking-wider">{label}</div>
     </div>
   );
 }
@@ -533,6 +569,7 @@ function EmptyState({ text }: { text: string }) {
 
 export default function StudentsPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState("");
@@ -548,14 +585,50 @@ export default function StudentsPage() {
   const [total, setTotal] = useState(0);
   const [debouncedSearch, setDebouncedSearch] = useState("");
 
+  // Advanced Filters
+  const [statusFilter, setStatusFilter] = useState<string>("active");
+  const [attFilter, setAttFilter] = useState<string>("all");
+  const [entFilter, setEntFilter] = useState<string>("all");
+
   // 360 Panel state
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelStudentId, setPanelStudentId] = useState<number | null>(null);
   const [panelData, setPanelData] = useState<any>(null);
   const [panelLoading, setPanelLoading] = useState(false);
-  const [panelMonth, setPanelMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [panelMonth, setPanelMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
   const [teacherFeedback, setTeacherFeedback] = useState<any[]>([]);
   const [lessonComments, setLessonComments] = useState<any[]>([]);
+  const [refresh, setRefresh] = useState(0);
+
+  // Modals state
+  const [archiveModalOpen, setArchiveModalOpen] = useState(false);
+  const [gradYear, setGradYear] = useState("");
+  const [addStudentModalOpen, setAddStudentModalOpen] = useState(false);
+  const [newStudent, setNewStudent] = useState({ full_name: "", phone: "", parent_name: "", parent_phone: "", group_id: "" });
+  const [importModalOpen, setImportModalOpen] = useState(false);
+
+  const handleBulkArchive = async () => {
+    if (!gradYear) return toast({ title: "Ошибка", description: "Укажите год выпуска" });
+    try {
+      await bulkArchiveStudents(gradYear);
+      toast({ title: "Успех", description: "Активные ученики переведены в архив" });
+      setArchiveModalOpen(false);
+      setRefresh(r => r + 1);
+    } catch (e: any) { toast({ title: "Ошибка", description: e.message, variant: "destructive" }); }
+  };
+
+  const handleAddStudent = async () => {
+    if (!newStudent.full_name) return toast({ title: "Ошибка", description: "Имя ученика обязательно" });
+    try {
+      await addStudent(newStudent);
+      toast({ title: "Успех", description: "Ученик добавлен" });
+      setAddStudentModalOpen(false);
+      setRefresh(r => r + 1);
+    } catch (e: any) { toast({ title: "Ошибка", description: e.message, variant: "destructive" }); }
+  };
 
   useEffect(() => {
     fetchGroups().then(setGroups).catch(() => {});
@@ -570,13 +643,25 @@ export default function StudentsPage() {
     let cancelled = false;
     const isInitial = students.length === 0;
     if (isInitial) setLoading(true); else setFetching(true);
+    
+    let att_min, att_max, ent_min, ent_max;
+    if (attFilter === "high") { att_min = 90; }
+    else if (attFilter === "mid") { att_min = 75; att_max = 89.9; }
+    else if (attFilter === "low") { att_max = 74.9; }
+
+    if (entFilter === "high") { ent_min = 120; }
+    else if (entFilter === "mid") { ent_min = 90; ent_max = 119; }
+    else if (entFilter === "low") { ent_max = 89; }
+
     fetchStudentsPaginated({
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
       search: debouncedSearch || undefined,
       group_id: selectedGroup !== "all" ? parseInt(selectedGroup) : undefined,
+      status: statusFilter,
       sort: sortKey,
       sort_dir: sortAsc ? "asc" : "desc",
+      att_min, att_max, ent_min, ent_max
     }).then(({ students: result, total: t }) => {
       if (!cancelled) { setStudents(Array.isArray(result) ? result : []); setTotal(t ?? 0); setLoading(false); setFetching(false); }
     }).catch(() => {
@@ -586,7 +671,7 @@ export default function StudentsPage() {
       }
     });
     return () => { cancelled = true; };
-  }, [page, debouncedSearch, selectedGroup, sortKey, sortAsc]);
+  }, [page, debouncedSearch, selectedGroup, sortKey, sortAsc, statusFilter, attFilter, entFilter, refresh]);
 
   // Handle command palette focus=search action
   useEffect(() => {
@@ -658,43 +743,99 @@ export default function StudentsPage() {
 
   return (
     <div>
-      {/* Group pills */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {groups.map(g => (
-          <button key={g.id}
-            onClick={() => { setSelectedGroup(selectedGroup === g.id.toString() ? "all" : g.id.toString()); setPage(0); }}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-              selectedGroup === g.id.toString() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
-            }`}>
-            {g.name}
-          </button>
-        ))}
-        {selectedGroup !== "all" && (
-          <button onClick={() => { setSelectedGroup("all"); setPage(0); }} className="px-3 py-1 rounded-full text-xs font-medium bg-destructive/10 text-destructive hover:bg-destructive/20">
-            Сбросить
-          </button>
-        )}
+      {/* Header Actions */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-3 flex-1">
+          <h1 className="text-2xl font-bold tracking-tight">Ученики</h1>
+          <Badge variant="secondary" className="font-mono text-sm">{total}</Badge>
+        </div>
+        <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" className="gap-1.5 h-8">
+                <Plus className="h-3.5 w-3.5" /> Добавить
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setAddStudentModalOpen(true)}>
+                <UserPlus className="h-4 w-4 mr-2" /> Вручную
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setImportModalOpen(true)}>
+                <Upload className="h-4 w-4 mr-2" /> Импорт из Excel
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {user?.role === "admin" && (
+            <Button variant="outline" size="sm" onClick={() => setArchiveModalOpen(true)} className="gap-2 text-orange-600 border-orange-200 hover:bg-orange-50">
+              <Archive className="h-4 w-4" />
+              Завершить сезон
+            </Button>
+          )}
+        </div>
       </div>
 
-      {/* Search */}
-      <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 mb-4">
-        <div className="relative flex-1 sm:max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input ref={searchInputRef} placeholder="Поиск по имени..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} className="pl-9" />
+      {/* Search and Filters */}
+      <div className="flex flex-col gap-3 mb-4">
+        {/* Top row: Search and main group select */}
+        <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+          <div className="relative flex-1 sm:max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input ref={searchInputRef} placeholder="Поиск по имени..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} className="pl-9 bg-background" />
+          </div>
+          <Select value={selectedGroup} onValueChange={(v) => { setSelectedGroup(v); setPage(0); }}>
+            <SelectTrigger className="w-full sm:w-48 bg-background">
+              <Filter className="h-4 w-4 mr-2" /><SelectValue placeholder="Все группы" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Все группы</SelectItem>
+              {groups.map((group) => (
+                <SelectItem key={group.id} value={group.id.toString()}>
+                  <span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={group.name} avatarUrl={group.avatar_url} size={18} showTooltip={false} />{group.name}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-        <Select value={selectedGroup} onValueChange={(v) => { setSelectedGroup(v); setPage(0); }}>
-          <SelectTrigger className="w-full sm:w-48">
-            <Filter className="h-4 w-4 mr-2" /><SelectValue placeholder="Все группы" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Все группы</SelectItem>
-            {groups.map((group) => (
-              <SelectItem key={group.id} value={group.id.toString()}>
-                <span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={group.name} size={18} showTooltip={false} />{group.name}</span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+
+        {/* Bottom row: Advanced filters */}
+        <div className="flex flex-wrap gap-2">
+          <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(0); }}>
+            <SelectTrigger className="w-[140px] h-8 text-xs bg-muted/50 border-dashed hover:bg-muted/80 transition-colors">
+              <SelectValue placeholder="Статус" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Все (включая архив)</SelectItem>
+              <SelectItem value="active">Активные</SelectItem>
+              <SelectItem value="archived">В архиве</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select value={attFilter} onValueChange={(v) => { setAttFilter(v); setPage(0); }}>
+            <SelectTrigger className="w-[180px] h-8 text-xs bg-muted/50 border-dashed hover:bg-muted/80 transition-colors">
+              <Calendar className="h-3 w-3 mr-1.5 opacity-70" />
+              <SelectValue placeholder="Посещаемость" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Без фильтра</SelectItem>
+              <SelectItem value="high">Отличная (≥ 90% за всё время)</SelectItem>
+              <SelectItem value="mid">Средняя (75-89% за всё время)</SelectItem>
+              <SelectItem value="low">Низкая (&lt; 75% за всё время)</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select value={entFilter} onValueChange={(v) => { setEntFilter(v); setPage(0); }}>
+            <SelectTrigger className="w-[180px] h-8 text-xs bg-muted/50 border-dashed hover:bg-muted/80 transition-colors">
+              <GraduationCap className="h-3 w-3 mr-1.5 opacity-70" />
+              <SelectValue placeholder="Балл ЕНТ" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Без фильтра</SelectItem>
+              <SelectItem value="high">Высокий (≥ 120, посл. срез)</SelectItem>
+              <SelectItem value="mid">Средний (90-119, посл. срез)</SelectItem>
+              <SelectItem value="low">Низкий (&lt; 90, посл. срез)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {/* Students Table */}
@@ -731,12 +872,26 @@ export default function StudentsPage() {
                     <div className="flex items-center gap-2">
                       <UserAvatar user={student} size="sm" />
                       <div>
-                        <p className="font-medium text-sm">{student.full_name}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-medium text-sm">{student.full_name}</p>
+                          {student.status === "archived" && student.graduation_year && (
+                            <Badge variant="outline" className="text-[10px] h-4 px-1 py-0">{student.graduation_year}</Badge>
+                          )}
+                        </div>
                         {student.parent_name && <p className="text-[11px] text-muted-foreground">Родитель: {student.parent_name}</p>}
                       </div>
                     </div>
                   </td>
-                  <td className="p-3"><Badge variant="outline" className="text-xs">{student.group_name || "—"}</Badge></td>
+                  <td className="p-3">
+                    {student.group_name ? (
+                      <Badge variant="outline" className="text-xs flex w-max items-center gap-1.5 px-2 py-0.5">
+                        <GroupPersonAvatar groupName={student.group_name} avatarUrl={student.group_avatar} size={14} showTooltip={false} />
+                        {student.group_name}
+                      </Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </td>
                   <td className="p-2 md:p-3 hidden md:table-cell text-sm text-muted-foreground">{student.phone || "—"}</td>
                   <td className="p-2 md:p-3 text-center">
                     {student.attendance_rate !== null && student.attendance_rate !== undefined ? (
@@ -795,10 +950,59 @@ export default function StudentsPage() {
               teacherFeedback={teacherFeedback}
               lessonComments={lessonComments}
               loading={panelLoading}
+              onOpenFull={panelStudentId ? () => { setPanelOpen(false); navigate(`/students/${panelStudentId}`); } : undefined}
             />
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* ── MODALS ── */}
+      {/* Archive Season */}
+      <Dialog open={archiveModalOpen} onOpenChange={setArchiveModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Завершить сезон</DialogTitle>
+            <DialogDescription>
+              Все активные ученики будут переведены в архив с указанным годом выпуска.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Label>Год выпуска (тег архива)</Label>
+            <Input value={gradYear} onChange={e => setGradYear(e.target.value)} placeholder="Например: Выпуск 2026" className="mt-2" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setArchiveModalOpen(false)}>Отмена</Button>
+            <Button variant="destructive" onClick={handleBulkArchive}>Завершить сезон</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Student Manually */}
+      <Dialog open={addStudentModalOpen} onOpenChange={setAddStudentModalOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Добавить ученика</DialogTitle></DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div><Label>ФИО</Label><Input value={newStudent.full_name} onChange={e => setNewStudent({...newStudent, full_name: e.target.value})} placeholder="Иванов Иван" /></div>
+            <div><Label>Телефон</Label><Input value={newStudent.phone} onChange={e => setNewStudent({...newStudent, phone: e.target.value})} placeholder="+7 777 123 4567" /></div>
+            <div><Label>Группа</Label>
+              <Select value={newStudent.group_id} onValueChange={v => setNewStudent({...newStudent, group_id: v})}>
+                <SelectTrigger><SelectValue placeholder="Выберите группу" /></SelectTrigger>
+                <SelectContent>{groups.map(g => <SelectItem key={g.id} value={g.id.toString()}>{g.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div><Label>ФИО родителя</Label><Input value={newStudent.parent_name} onChange={e => setNewStudent({...newStudent, parent_name: e.target.value})} /></div>
+            <div><Label>Телефон родителя</Label><Input value={newStudent.parent_phone} onChange={e => setNewStudent({...newStudent, parent_phone: e.target.value})} /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddStudentModalOpen(false)}>Отмена</Button>
+            <Button onClick={handleAddStudent}>Сохранить</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import Excel */}
+      <BulkImportModal open={importModalOpen} onOpenChange={setImportModalOpen} onSuccess={() => setRefresh(r => r + 1)} />
+
     </div>
   );
 }

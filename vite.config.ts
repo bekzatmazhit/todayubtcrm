@@ -7,18 +7,22 @@ export default defineConfig(({ mode }) => ({
   server: {
     // Слушаем на всех интерфейсах, чтобы можно было открывать по IP
     host: "0.0.0.0",
-    port: 8080,
-    strictPort: true,
+    port: Number(process.env.VITE_DEV_PORT || 5173),
+    strictPort: false,
     hmr: {
       // Хост/порт для WebSocket-клиента
       host: "localhost",
-      port: 8080,
+      port: Number(process.env.VITE_DEV_PORT || 5173),
       overlay: false,
     },
     // Dev-прокси: чтобы фронт обращался к /api без CORS
     proxy: {
       "/api": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${process.env.VITE_BACKEND_PORT || 3001}`,
+        changeOrigin: true,
+      },
+      "/uploads": {
+        target: `http://localhost:${process.env.VITE_BACKEND_PORT || 3001}`,
         changeOrigin: true,
       },
     },

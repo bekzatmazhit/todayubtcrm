@@ -1,4 +1,4 @@
-import { Settings, Save, Eye, EyeOff, KeyRound, User, Phone, Mail, Camera, Trash2, Paintbrush } from "lucide-react";
+import { Settings, Save, Eye, EyeOff, KeyRound, User, Phone, Mail, Camera, Trash2, Paintbrush, LogOut } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,7 +32,7 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export default function SettingsPage() {
-  const { user, updateAvatar } = useAuth();
+  const { user, updateAvatar, logout } = useAuth();
   const { theme, setTheme } = useTheme();
   const { i18n } = useTranslation();
   const [profile, setProfile] = useState<any>(null);
@@ -284,10 +284,16 @@ export default function SettingsPage() {
                 <div className="hidden sm:block" />
               </div>
 
-              <Button onClick={handleSaveProfile} disabled={saving} className="gap-2">
-                <Save className="h-4 w-4" />
-                {saving ? "Сохранение..." : "Сохранить"}
-              </Button>
+              <div className="flex items-center gap-4 pt-2">
+                <Button onClick={handleSaveProfile} disabled={saving} className="gap-2">
+                  <Save className="h-4 w-4" />
+                  {saving ? "Сохранение..." : "Сохранить"}
+                </Button>
+                <Button variant="destructive" onClick={logout} className="gap-2 ml-auto">
+                  <LogOut className="h-4 w-4" />
+                  Выйти из аккаунта
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

@@ -1,4 +1,5 @@
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { BACKEND_ORIGIN } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useMemo } from "react";
 
@@ -83,7 +84,7 @@ export function UserAvatar({ user, size = "md", className }: UserAvatarProps) {
   const initials = getInitials(user?.name, user?.surname, user?.full_name);
   const sizeClass = SIZE_MAP[size];
   const avatarUrl = user?.avatar_url
-    ? (user.avatar_url.startsWith("http") ? user.avatar_url : `http://localhost:3001${user.avatar_url}`)
+    ? (user.avatar_url.startsWith("http") ? user.avatar_url : `${BACKEND_ORIGIN}${user.avatar_url}`)
     : null;
 
   const identiconUrl = useMemo(() => {

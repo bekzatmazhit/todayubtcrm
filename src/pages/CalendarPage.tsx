@@ -1,16 +1,18 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { loadLessons, saveLessons } from "@/lib/storage";
 import { Lesson } from "@/data/mockSchedule";
-import { fetchLessons, fetchTasks, fetchTimeSlots, updateTask, fetchNotes, createNote as createNoteAPI, deleteNoteById, fetchAdhocLessons, createAdhocLesson, deleteAdhocLesson, updateAdhocLessonAttendance, fetchStudents, fetchUsers, fetchSubjects, fetchMarkedLessons, fetchScheduleFillStatus, fetchAttendanceReconciliation } from "@/lib/api";
+import { fetchLessons, fetchTimeSlots, fetchNotes, createNote as createNoteAPI, deleteNoteById, fetchAdhocLessons, createAdhocLesson, deleteAdhocLesson, updateAdhocLessonAttendance, fetchStudents, fetchUsers, fetchSubjects, fetchMarkedLessons, fetchScheduleFillStatus, fetchAttendanceReconciliation } from "@/lib/api";
 import { ClassManagementModal } from "@/components/ClassManagementModal";
 import ScheduleConstructor from "@/components/ScheduleConstructor";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
+import { UserAvatar } from "@/components/UserAvatar";
 import { useAuth } from "@/contexts/AuthContext";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, X, Settings2, PanelRightClose, PanelRightOpen, CheckCircle2, Circle, ListTodo, Download, Users as UsersIcon, ClipboardCheck, StickyNote, Share2, Copy, Check, Trash2 } from "lucide-react";
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, X, Settings2, CheckCircle2, Circle, ListTodo, Download, Users as UsersIcon, ClipboardCheck, StickyNote, Share2, Copy, Check, Trash2, MoreVertical } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -85,13 +87,6 @@ export default function CalendarPage() {
   const [shareGroupId, setShareGroupId] = useState<string>("all");
   const [shareCreating, setShareCreating] = useState(false);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
-  const [showTaskPanel, _setShowTaskPanel] = useState(() => {
-    try { const v = localStorage.getItem("today_cal_taskPanel"); if (v !== null) return v === "true"; } catch {} return true;
-  });
-  const setShowTaskPanel = (v: boolean | ((prev: boolean) => boolean)) => {
-    _setShowTaskPanel(prev => { const next = typeof v === "function" ? v(prev) : v; try { localStorage.setItem("today_cal_taskPanel", String(next)); } catch {} return next; });
-  };
-  const [tasks, setTasks] = useState<any[]>([]);
   const [scheduleViewMode, _setScheduleViewMode] = useState<"teachers" | "groups">(() => {
     try { const v = localStorage.getItem("today_cal_scheduleView"); if (v === "teachers" || v === "groups") return v; } catch {} return "teachers";
   });
@@ -176,16 +171,6 @@ export default function CalendarPage() {
 
   useEffect(() => { loadCalendarData(); }, [loadCalendarData]);
 
-  // Load tasks
-  const loadTasksData = useCallback(async () => {
-    try {
-      const data = await fetchTasks();
-      setTasks(data);
-    } catch (e) { console.error("Error loading tasks:", e); }
-  }, []);
-
-  useEffect(() => { loadTasksData(); }, [loadTasksData]);
-
   // Load ad-hoc lessons
   const loadAdhocData = useCallback(async () => {
     try {
@@ -228,24 +213,6 @@ export default function CalendarPage() {
     toast.success("Сборный урок создан");
   };
 
-  const todayTasks = useMemo(() => {
-    const todayStr = format(new Date(), "yyyy-MM-dd");
-    return tasks.filter(t => {
-      if (t.status === "done") return false;
-      if (t.due_date && t.due_date <= todayStr) return true;
-      if (!t.due_date) return true;
-      return false;
-    });
-  }, [tasks]);
-
-  const toggleTaskDone = async (taskId: number) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
-    const newStatus = task.status === "done" ? "todo" : "done";
-    if (newStatus === "done") playSuccess();
-    await updateTask(taskId, { status: newStatus });
-    await loadTasksData();
-  };
 
   const lessons = useMemo(() => {
     const currentDateStr = format(currentDate, "yyyy-MM-dd");
@@ -674,7 +641,7 @@ ${getPrintWatermarkStyles()}</style></head><body>
   return (
     <div className="flex gap-0">
       {/* Main calendar area */}
-      <div className={`flex-1 min-w-0 transition-all duration-300 ${showTaskPanel ? 'pr-0' : ''}`}>
+      <div className="flex-1 min-w-0 transition-all duration-300">
       {/* Header */}
       <div className="sticky top-0 z-20 bg-background/90 backdrop-blur-md border-b border-border pb-3 md:pb-4 mb-4 md:mb-6">
         <div className="flex items-center justify-end gap-3 md:gap-4">
@@ -685,67 +652,59 @@ ${getPrintWatermarkStyles()}</style></head><body>
             <TooltipProvider delayDuration={200}>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={() => openAddNote()}>
-                    <StickyNote className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{t("Add Note")}</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
                   <Button variant="outline" size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={openAdhocModal}>
                     <UsersIcon className="h-4 w-4" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Сборный урок</TooltipContent>
               </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={exportSchedulePDF}>
-                    <Download className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Скачать PDF</TooltipContent>
-              </Tooltip>
               {user?.role === "admin" && (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={handleOpenShareDialog}>
-                      <Share2 className="h-4 w-4" />
+                    <Button variant={showConstructor ? "default" : "outline"} size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={() => setShowConstructor(!showConstructor)}>
+                      <Settings2 className="h-4 w-4" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Поделиться расписанием</TooltipContent>
+                  <TooltipContent>{t("Schedule Constructor")}</TooltipContent>
                 </Tooltip>
               )}
-              {user?.role === "admin" && (
-                <>
-                  <div className="w-px h-5 bg-border mx-1" />
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant={showConstructor ? "default" : "outline"} size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={() => setShowConstructor(!showConstructor)}>
-                        <Settings2 className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>{t("Schedule Constructor")}</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant={viewMode === "report" ? "default" : "outline"} size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={() => setViewMode("report")}>
-                        <ListTodo className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Отчет учителей</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant={viewMode === "reconciliation" ? "default" : "outline"} size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0" onClick={() => setViewMode("reconciliation")}>
-                        <ClipboardCheck className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Сверка</TooltipContent>
-                  </Tooltip>
-                </>
-              )}
+              
+              <div className="w-px h-5 bg-border mx-1" />
+              
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-7 w-7 md:h-8 md:w-8 p-0">
+                    <MoreVertical className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => openAddNote()}>
+                    <StickyNote className="mr-2 h-4 w-4" />
+                    <span>{t("Add Note")}</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={exportSchedulePDF}>
+                    <Download className="mr-2 h-4 w-4" />
+                    <span>Скачать PDF</span>
+                  </DropdownMenuItem>
+                  {user?.role === "admin" && (
+                    <>
+                      <DropdownMenuItem onClick={handleOpenShareDialog}>
+                        <Share2 className="mr-2 h-4 w-4" />
+                        <span>Поделиться расписанием</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => setViewMode("report")}>
+                        <ListTodo className="mr-2 h-4 w-4" />
+                        <span>Отчет учителей</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setViewMode("reconciliation")}>
+                        <ClipboardCheck className="mr-2 h-4 w-4" />
+                        <span>Сверка</span>
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </TooltipProvider>
           </div>
         </div>
@@ -858,10 +817,14 @@ ${getPrintWatermarkStyles()}</style></head><body>
                         </div>
                         <div className={`w-1 shrink-0 ${colorBg}`} />
                         <div className="flex-1 px-3 py-3 min-w-0">
-                          <p className="font-semibold text-sm leading-tight truncate">{lesson.group_name}</p>
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <GroupPersonAvatar groupName={lesson.group_name} avatarUrl={lesson.group_avatar} size={16} showTooltip={false} />
+                            <p className="font-semibold text-sm leading-tight truncate">{lesson.group_name}</p>
+                          </div>
                           <p className="text-sm text-muted-foreground truncate mt-0.5">{lesson.subject}</p>
-                          <p className="text-xs text-muted-foreground/70 mt-1 truncate">
-                            {lesson.teacher_name}{lesson.room ? ` · ${lesson.room}` : ''}
+                          <p className="text-xs text-muted-foreground/70 mt-1 truncate flex items-center gap-1">
+                            <UserAvatar user={{ name: lesson.teacher_name, avatar_url: lesson.teacher_avatar }} size="xs" />
+                            <span>{lesson.teacher_name}{lesson.room ? ` · ${lesson.room}` : ''}</span>
                           </p>
                         </div>
                         {marked && <div className="flex items-center pr-3"><CheckCircle2 className="h-5 w-5 text-primary" /></div>}
@@ -911,7 +874,13 @@ ${getPrintWatermarkStyles()}</style></head><body>
           {!isMobile && (user?.role === "admin" ? (
             /* Admin view: switchable between teachers and groups */
             <div className="rounded-xl border border-border bg-card overflow-auto shadow-sm">
-              {scheduleViewMode === "teachers" ? (
+              {activeTimeSlotsToday.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+                  <CalendarIcon className="h-16 w-16 mb-4 opacity-20" />
+                  <p className="text-lg font-medium text-foreground">Нет уроков</p>
+                  <p className="text-sm mt-1">В этот день по расписанию нет регулярных занятий</p>
+                </div>
+              ) : scheduleViewMode === "teachers" ? (
               <table className="w-full border-collapse" style={{ minWidth: `${allTeachers.length * 160 + 140}px` }}>
                 <thead>
                   <tr>
@@ -944,7 +913,10 @@ ${getPrintWatermarkStyles()}</style></head><body>
                                 {isLessonMarked(lesson, format(currentDate, "yyyy-MM-dd")) && (
                                   <CheckCircle2 className="h-4 w-4 text-primary absolute top-2 right-2" />
                                 )}
-                                <p className="text-xs font-semibold text-primary truncate">{lesson.group_name}</p>
+                                <div className="flex items-center gap-1 mb-0.5">
+                                  <GroupPersonAvatar groupName={lesson.group_name} avatarUrl={lesson.group_avatar} size={14} showTooltip={false} />
+                                  <p className="text-xs font-semibold text-primary truncate">{lesson.group_name}</p>
+                                </div>
                                 <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{lesson.subject}</p>
                               </button>
                             ) : (
@@ -968,7 +940,7 @@ ${getPrintWatermarkStyles()}</style></head><body>
                     {allGroups.map((group) => (
                       <th key={group.id} className="bg-muted p-3 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider border-b border-r border-border min-w-[160px]">
                         <div className="flex items-center justify-center gap-1.5">
-                          <GroupPersonAvatar groupName={group.name} size={22} />
+                          <GroupPersonAvatar groupName={group.name} avatarUrl={group.avatar_url} size={22} />
                           {group.name}
                         </div>
                       </th>
@@ -995,7 +967,10 @@ ${getPrintWatermarkStyles()}</style></head><body>
                                   <CheckCircle2 className="h-4 w-4 text-primary absolute top-2 right-2" />
                                 )}
                                 <p className="text-xs font-semibold text-primary truncate">{lesson.subject}</p>
-                                <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{lesson.teacher_name}</p>
+                                <p className="text-[11px] text-muted-foreground mt-0.5 truncate flex items-center gap-1">
+                                  <UserAvatar user={{ name: lesson.teacher_name, avatar_url: lesson.teacher_avatar }} size="xs" />
+                                  <span>{lesson.teacher_name}</span>
+                                </p>
                                 <p className="text-[10px] text-muted-foreground/70 mt-0.5 truncate">{lesson.room}</p>
                               </button>
                             ) : (
@@ -1013,6 +988,13 @@ ${getPrintWatermarkStyles()}</style></head><body>
           ) : (
             /* Teacher / umo_head view: rooms grid */
             <div className="rounded-xl border border-border bg-card overflow-auto shadow-sm">
+              {activeTimeSlotsToday.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+                  <CalendarIcon className="h-16 w-16 mb-4 opacity-20" />
+                  <p className="text-lg font-medium text-foreground">Нет уроков</p>
+                  <p className="text-sm mt-1">В этот день по расписанию нет регулярных занятий</p>
+                </div>
+              ) : (
               <table className="w-full border-collapse min-w-[900px]">
                 <thead>
                   <tr>
@@ -1044,9 +1026,15 @@ ${getPrintWatermarkStyles()}</style></head><body>
                                 {isLessonMarked(lesson, format(currentDate, "yyyy-MM-dd")) && (
                                   <CheckCircle2 className="h-4 w-4 text-primary absolute top-2 right-2" />
                                 )}
-                                <p className="text-xs font-semibold text-primary truncate">{lesson.group_name}</p>
+                                <div className="flex items-center gap-1 mb-0.5">
+                                  <GroupPersonAvatar groupName={lesson.group_name} avatarUrl={lesson.group_avatar} size={12} showTooltip={false} />
+                                  <p className="text-xs font-semibold text-primary truncate">{lesson.group_name}</p>
+                                </div>
                                 <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{lesson.subject}</p>
-                                <p className="text-[10px] text-muted-foreground/70 mt-0.5 truncate">{lesson.teacher_name}</p>
+                                <p className="text-[10px] text-muted-foreground/70 mt-0.5 truncate flex items-center gap-1">
+                                  <UserAvatar user={{ name: lesson.teacher_name, avatar_url: lesson.teacher_avatar }} size="xs" />
+                                  <span>{lesson.teacher_name}</span>
+                                </p>
                               </button>
                             ) : (
                               <div className="h-16" />
@@ -1058,6 +1046,7 @@ ${getPrintWatermarkStyles()}</style></head><body>
                   ))}
                 </tbody>
               </table>
+              )}
             </div>
           ))}
         </>
@@ -1106,7 +1095,10 @@ ${getPrintWatermarkStyles()}</style></head><body>
                       {isLessonMarked(lesson, dateStr) && (
                         <CheckCircle2 className="h-3.5 w-3.5 text-primary absolute top-1 right-1" />
                       )}
-                      <p className="font-medium text-primary truncate">{lesson.group_name}</p>
+                      <div className="flex items-center gap-1 mb-0.5">
+                        <GroupPersonAvatar groupName={lesson.group_name} avatarUrl={lesson.group_avatar} size={14} showTooltip={false} />
+                        <p className="font-medium text-primary truncate">{lesson.group_name}</p>
+                      </div>
                       <p className="text-muted-foreground truncate">{lesson.subject}</p>
                     </button>
                   ))}
@@ -1159,7 +1151,10 @@ ${getPrintWatermarkStyles()}</style></head><body>
                       {isLessonMarked(lesson, dateStr) && (
                         <CheckCircle2 className="h-3 w-3 text-primary absolute top-1 right-1" />
                       )}
-                      <span className="font-medium text-primary">{lesson.group_name}</span>
+                      <div className="flex items-center gap-1 truncate w-full">
+                        <div className="shrink-0"><GroupPersonAvatar groupName={lesson.group_name} avatarUrl={lesson.group_avatar} size={12} showTooltip={false} /></div>
+                        <span className="font-medium text-primary truncate min-w-0">{lesson.group_name}</span>
+                      </div>
                       <span className="text-muted-foreground ml-1">{lesson.subject}</span>
                     </button>
                   ))}
@@ -1341,7 +1336,7 @@ ${getPrintWatermarkStyles()}</style></head><body>
                       <SelectContent>
                         <SelectItem value="all">Все группы</SelectItem>
                         {reconGroups.map((g: any) => (
-                          <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>
+                          <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} avatarUrl={g.avatar_url} size={18} showTooltip={false} />{g.name}</span></SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -1624,14 +1619,17 @@ ${getPrintWatermarkStyles()}</style></head><body>
                   <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Все группы</SelectItem>
-                    {[...new Set(allStudents.filter(s => s.group_name).map(s => s.group_name))].sort().map(gn =>
-                      <SelectItem key={gn} value={gn}>
-                        <span className="flex items-center gap-1.5">
-                          <GroupPersonAvatar groupName={gn} size={18} showTooltip={false} />
-                          {gn}
-                        </span>
-                      </SelectItem>
-                    )}
+                    {[...new Set(allStudents.filter(s => s.group_name).map(s => s.group_name))].sort().map(gn => {
+                      const sampleStudent = allStudents.find(s => s.group_name === gn);
+                      return (
+                        <SelectItem key={gn} value={gn}>
+                          <span className="flex items-center gap-1.5">
+                            <GroupPersonAvatar groupName={gn} avatarUrl={sampleStudent?.group_avatar} size={18} showTooltip={false} />
+                            {gn}
+                          </span>
+                        </SelectItem>
+                      );
+                    })}
                   </SelectContent>
                 </Select>
               </div>
@@ -1724,77 +1722,6 @@ ${getPrintWatermarkStyles()}</style></head><body>
       </>
       )}
       </>
-      </div>
-
-      {/* Task Panel Toggle Button (always visible) */}
-      <button
-        onClick={() => setShowTaskPanel(!showTaskPanel)}
-        className="sticky top-20 self-start z-30 items-center justify-center w-6 h-12 my-auto mt-20 bg-muted hover:bg-muted/80 border border-border rounded-l-md transition-colors hidden md:flex"
-        title={showTaskPanel ? t("Hide tasks") : t("Show tasks")}
-      >
-        {showTaskPanel ? <PanelRightClose className="h-3.5 w-3.5 text-muted-foreground" /> : <PanelRightOpen className="h-3.5 w-3.5 text-muted-foreground" />}
-      </button>
-
-      {/* Tasks Sidebar */}
-      <div className={`sticky top-0 self-start h-[calc(100vh-2rem)] transition-all duration-300 overflow-hidden hidden md:block ${
-        showTaskPanel ? 'w-72 opacity-100' : 'w-0 opacity-0'
-      }`}>
-        <div className="w-72 h-full flex flex-col border-l border-border bg-card/50 rounded-xl ml-1">
-          {/* Panel Header */}
-          <div className="flex items-center gap-2 p-3 border-b border-border">
-            <ListTodo className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold text-foreground flex-1">{t("Tasks for Today")}</h3>
-            <Badge variant="secondary" className="text-[10px] px-1.5">{todayTasks.length}</Badge>
-          </div>
-
-          {/* Task List */}
-          <div className="flex-1 overflow-y-auto p-2 space-y-1">
-            {todayTasks.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-                <CheckCircle2 className="h-8 w-8 mb-2 opacity-30" />
-                <p className="text-xs">{t("No tasks for today")}</p>
-              </div>
-            ) : (
-              todayTasks.map(task => (
-                <div
-                  key={task.id}
-                  className={`flex items-start gap-2 p-2 rounded-lg hover:bg-muted/50 transition-colors group ${
-                    task.status === 'done' ? 'opacity-50' : ''
-                  }`}
-                >
-                  <Checkbox
-                    checked={task.status === 'done'}
-                    onCheckedChange={() => toggleTaskDone(task.id)}
-                    className="mt-0.5 h-4 w-4"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-xs font-medium leading-tight ${
-                      task.status === 'done' ? 'line-through text-muted-foreground' : 'text-foreground'
-                    }`}>{task.title}</p>
-                    {task.description && (
-                      <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{task.description}</p>
-                    )}
-                    <div className="flex items-center gap-1.5 mt-1">
-                      {task.priority && (
-                        <span className={`text-[9px] px-1 py-0.5 rounded font-medium ${
-                          task.priority === 'high' ? 'bg-destructive/10 text-destructive' :
-                          task.priority === 'medium' ? 'bg-amber-500/10 text-amber-600' :
-                          'bg-muted text-muted-foreground'
-                        }`}>{task.priority}</span>
-                      )}
-                      {task.due_date && (
-                        <span className="text-[9px] text-muted-foreground">{task.due_date}</span>
-                      )}
-                      {task.assignee_name && (
-                        <span className="text-[9px] text-muted-foreground truncate">{task.assignee_name}</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
       </div>
     </div>
   );

@@ -28,6 +28,10 @@ function toLatin(str) {
 
 export const db = new Database(dbPath);
 
+db.function('LOWER_CYR', (str) => {
+  return str ? String(str).toLowerCase() : '';
+});
+
 export function initializeDatabase() {
   db.pragma("foreign_keys = ON");
   db.pragma("journal_mode = WAL");
@@ -65,6 +69,8 @@ export function initializeDatabase() {
       name       TEXT UNIQUE NOT NULL,
       profile_id INTEGER,
       curator_id INTEGER,
+      status     TEXT DEFAULT 'active',
+      avatar_url TEXT,
       FOREIGN KEY(profile_id) REFERENCES profiles(id),
       FOREIGN KEY(curator_id) REFERENCES users(id)
     );
@@ -117,6 +123,7 @@ export function initializeDatabase() {
       group_id     INTEGER,
       status       TEXT DEFAULT 'active',
       avatar_url   TEXT,
+      graduation_year TEXT,
       FOREIGN KEY(group_id) REFERENCES groups(id)
     );
 
@@ -132,6 +139,7 @@ export function initializeDatabase() {
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id INTEGER NOT NULL,
       lesson_id  INTEGER NOT NULL,
+      group_id   INTEGER,
       status     TEXT DEFAULT 'present',
       lateness   TEXT DEFAULT 'on_time',
       homework   TEXT DEFAULT 'done',
@@ -148,6 +156,7 @@ export function initializeDatabase() {
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id INTEGER NOT NULL,
       subject_id INTEGER NOT NULL,
+      group_id   INTEGER,
       score      INTEGER NOT NULL DEFAULT 0,
       month      TEXT NOT NULL,
       created_at TEXT DEFAULT (datetime('now')),
@@ -378,6 +387,8 @@ export function initializeDatabase() {
   try { db.exec(`ALTER TABLE users ADD COLUMN avatar_url TEXT`); } catch {}
   // Migrate: add avatar_url to students
   try { db.exec(`ALTER TABLE students ADD COLUMN avatar_url TEXT`); } catch {}
+  // Migrate: add avatar_url to groups
+  try { db.exec(`ALTER TABLE groups ADD COLUMN avatar_url TEXT`); } catch {}
 
   // Migrate: add confirmation_status and confirmed_at to tasks
   try { db.exec(`ALTER TABLE tasks ADD COLUMN confirmation_status TEXT DEFAULT 'none'`); } catch {}
@@ -597,6 +608,19 @@ export function initializeDatabase() {
     );
   `);
 
+  // Student monthly reports
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS student_monthly_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL,
+      month TEXT NOT NULL,
+      summary TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(student_id, month)
+    )
+  `);
+
   // Schedule share tokens (for public schedule links)
   db.exec(`
     CREATE TABLE IF NOT EXISTS schedule_share_tokens (
@@ -730,9 +754,29 @@ export function initializeDatabase() {
   loadCSV("schedule", "../database_today - schedule .csv");
 
   generateEmails();
+  ensureDemoAccounts();
 
-  console.log("\u2705 Database initialized");
+  console.log("✅ Database initialized");
   printCredentials();
+}
+
+function ensureDemoAccounts() {
+  const existing = db.prepare("SELECT email FROM users WHERE email IN (?, ?, ?)").all(
+    "admin@today.edu",
+    "head@today.edu",
+    "teacher@today.edu",
+  ).map((u) => u.email);
+
+  const insert = db.prepare("INSERT OR IGNORE INTO users (name, surname, phone, email, password, role_id) VALUES (?, ?, ?, ?, ?, ?)");
+  if (!existing.includes("admin@today.edu")) {
+    insert.run("Admin", "Today", null, "admin@today.edu", "admin123", 1);
+  }
+  if (!existing.includes("head@today.edu")) {
+    insert.run("Head", "Today", null, "head@today.edu", "head123", 2);
+  }
+  if (!existing.includes("teacher@today.edu")) {
+    insert.run("Teacher", "Today", null, "teacher@today.edu", "teacher123", 3);
+  }
 }
 
 // === CSV LOADING ===

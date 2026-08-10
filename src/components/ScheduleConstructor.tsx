@@ -1,9 +1,9 @@
-﻿import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { toast } from "sonner";
 import {
   fetchSchedule, fetchGroups, fetchSubjects, fetchUsers, fetchRooms, fetchTimeSlots, fetchStudents, createOrGetTimeSlot,
-  createScheduleEntry, updateScheduleEntry, moveScheduleEntry, deleteScheduleEntry, publishSchedule,
+  createScheduleEntry, updateScheduleEntry, moveScheduleEntry, deleteScheduleEntry, publishSchedule, clearSchedule,
   type ScheduleEntry,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,8 @@ import { Badge } from "@/components/ui/badge";
 import { Plus, X, Save, BookPlus, Check, Users, User } from "lucide-react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { UserAvatar } from "@/components/UserAvatar";
+import { useAuth } from "@/contexts/AuthContext";
+import { Trash2 } from "lucide-react";
 
 interface TimeSlot { id: number; start_time: string; end_time: string; label: string }
 interface Group { id: number; name: string }
@@ -49,6 +51,7 @@ const GROUP_COLORS = [
 const getGroupColor = (groupId: number) => GROUP_COLORS[(groupId - 1) % GROUP_COLORS.length];
 
 export default function ScheduleConstructor({ onClose }: Props) {
+  const { user } = useAuth();
   const [schedule, setSchedule] = useState<ScheduleEntry[]>([]);
   const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -56,6 +59,7 @@ export default function ScheduleConstructor({ onClose }: Props) {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [cycle, setCycle] = useState<"PSP" | "VChS">("PSP");
+  const [viewMode, setViewMode] = useState<"teachers" | "groups">("teachers");
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ModalMode>(null);
   const [formGroup, setFormGroup] = useState("");
@@ -102,8 +106,10 @@ export default function ScheduleConstructor({ onClose }: Props) {
   // Only show time slots that have at least one lesson in current cycle
   const activeTimeSlots = timeSlots.filter(slot => view.some(s => s.time_slot_id === slot.id));
 
-  const getCell = (teacherId: number, slotId: number): ScheduleEntry | undefined =>
-    view.find(s => s.teacher_id === teacherId && s.time_slot_id === slotId);
+  const getCell = (colId: number, slotId: number): ScheduleEntry | undefined =>
+    viewMode === "teachers"
+      ? view.find(s => s.teacher_id === colId && s.time_slot_id === slotId)
+      : view.find(s => s.group_id === colId && s.time_slot_id === slotId);
 
   const resetPickerState = () => {
     setAssignMode("group");
@@ -113,17 +119,22 @@ export default function ScheduleConstructor({ onClose }: Props) {
     setStudentSearch("");
   };
 
-  const openAdd = (teacherId: number, slotId: number) => {
-    setFormGroup(String(groups[0]?.id ?? ""));
+  const openAdd = (colId: number, slotId: number) => {
+    if (viewMode === "teachers") {
+      setFormTeacher(String(colId));
+      setFormGroup(String(groups[0]?.id ?? ""));
+    } else {
+      setFormTeacher(String(teachers[0]?.id ?? ""));
+      setFormGroup(String(colId));
+    }
     setFormSubject(String(subjects[0]?.id ?? ""));
-    setFormTeacher(String(teacherId));
     setFormCycle(cycle);
     setFormPresetSlot(String(slotId));
     setSlotMode("preset");
     setCustomStart("");
     setCustomEnd("");
     resetPickerState();
-    setModal({ kind: "add", teacherId, slotId });
+    setModal({ kind: "add", teacherId: colId, slotId });
   };
 
   const openFreeAdd = () => {
@@ -137,6 +148,17 @@ export default function ScheduleConstructor({ onClose }: Props) {
     setCustomEnd("");
     resetPickerState();
     setModal({ kind: "free-add" });
+  };
+
+  const handleClearSchedule = async () => {
+    if (!confirm(`Вы уверены, что хотите полностью очистить расписание для ${cycle === "PSP" ? "ПСП" : "ВЧС"}? Это действие нельзя отменить.`)) return;
+    try {
+      await clearSchedule(cycle);
+      setSchedule(prev => prev.filter(s => s.cycle !== cycle));
+      toast.success("Расписание очищено");
+    } catch (e: any) {
+      toast.error(e.message || "Ошибка при очистке");
+    }
   };
 
   const openEdit = (entry: ScheduleEntry) => {
@@ -288,12 +310,15 @@ export default function ScheduleConstructor({ onClose }: Props) {
     if (result.source.droppableId === result.destination.droppableId) return;
 
     const entryId = parseInt(result.draggableId.replace("e-", ""));
-    const [newTeacherStr, newSlotStr] = result.destination.droppableId.split("_");
-    const newTeacherId = Number(newTeacherStr);
+    const [newColStr, newSlotStr] = result.destination.droppableId.split("_");
+    const newColId = Number(newColStr);
     const newSlotId = Number(newSlotStr);
 
     const entry = schedule.find(s => s.id === entryId);
     if (!entry) return;
+
+    const newTeacherId = viewMode === "teachers" ? newColId : entry.teacher_id;
+    const newGroupId = viewMode === "groups" ? newColId : (entry.group_id ?? 0);
 
     // Helper: find the time slot object by id
     const newSlot = timeSlots.find(ts => ts.id === newSlotId);
@@ -315,11 +340,11 @@ export default function ScheduleConstructor({ onClose }: Props) {
     }
 
     // Guard: same group already has an overlapping lesson
-    const groupOccupied = view.find(s => {
-      if (s.id === entryId || s.group_id !== entry.group_id) return false;
+    const groupOccupied = newGroupId ? view.find(s => {
+      if (s.id === entryId || s.group_id !== newGroupId) return false;
       const slot = timeSlots.find(ts => ts.id === s.time_slot_id);
       return slot && overlaps(newSlot, slot);
-    });
+    }) : undefined;
     if (groupOccupied) {
       const occSlot = timeSlots.find(ts => ts.id === groupOccupied.time_slot_id);
       toast.error(`Конфликт: У группы ${groupOccupied.group_name} уже есть урок «${groupOccupied.subject_name}» с ${occSlot?.start_time} до ${occSlot?.end_time}`);
@@ -328,20 +353,20 @@ export default function ScheduleConstructor({ onClose }: Props) {
 
     // Optimistic update
     setSchedule(prev =>
-      prev.map(s => s.id === entryId ? { ...s, teacher_id: newTeacherId, time_slot_id: newSlotId } : s)
+      prev.map(s => s.id === entryId ? { ...s, teacher_id: newTeacherId, group_id: newGroupId, time_slot_id: newSlotId } : s)
     );
 
     try {
-      await moveScheduleEntry(entryId, { teacher_id: newTeacherId, time_slot_id: newSlotId, cycle });
+      await moveScheduleEntry(entryId, { teacher_id: newTeacherId, group_id: newGroupId, time_slot_id: newSlotId, cycle });
       toast.success("Расписание обновлено");
       // Background full sync
       fetchSchedule().then(sched => setSchedule(sched));
     } catch (err: any) {
       // Rollback
       setSchedule(prev =>
-        prev.map(s => s.id === entryId ? { ...s, teacher_id: entry.teacher_id, time_slot_id: entry.time_slot_id } : s)
+        prev.map(s => s.id === entryId ? { ...s, teacher_id: entry.teacher_id, group_id: entry.group_id, time_slot_id: entry.time_slot_id } : s)
       );
-      toast.error(err.error ?? "Ошибка: Учитель уже занят в это время");
+      toast.error(err.error ?? "Ошибка при переносе урока");
     }
   };
 
@@ -375,6 +400,23 @@ export default function ScheduleConstructor({ onClose }: Props) {
             <BookPlus className="h-3.5 w-3.5" />
             Добавить урок
           </Button>
+          {/* View Mode toggle */}
+          <div className="flex rounded-md overflow-hidden border border-zinc-200 dark:border-zinc-700 text-sm font-medium mr-2">
+            {(["teachers", "groups"] as const).map(m => (
+              <button
+                key={m}
+                onClick={() => setViewMode(m)}
+                className={`px-3.5 py-1.5 transition-colors ${
+                  viewMode === m
+                    ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900"
+                    : "bg-white dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+                }`}
+              >
+                {m === "teachers" ? "По учителям" : "По группам"}
+              </button>
+            ))}
+          </div>
+
           {/* Cycle toggle */}
           <div className="flex rounded-md overflow-hidden border border-zinc-200 dark:border-zinc-700 text-sm font-medium">
             {(["PSP", "VChS"] as const).map(c => (
@@ -409,6 +451,18 @@ export default function ScheduleConstructor({ onClose }: Props) {
             )}
             {publishing ? "Отправка…" : published ? "Готово" : "Сохранить"}
           </Button>
+          {user?.role === "admin" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleClearSchedule}
+              className="h-8 gap-1.5 text-destructive hover:text-destructive hover:bg-destructive/10"
+              title="Очистить расписание"
+            >
+              <Trash2 className="h-4 w-4" />
+              Очистить
+            </Button>
+          )}
           <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
             <X className="h-4 w-4" />
           </Button>
@@ -420,14 +474,14 @@ export default function ScheduleConstructor({ onClose }: Props) {
         <div className="overflow-auto rounded-lg border border-zinc-200 dark:border-zinc-800 shadow-sm">
           <table
             className="w-full border-collapse bg-white dark:bg-zinc-950"
-            style={{ minWidth: `${teachers.length * 160 + 120}px` }}
+            style={{ minWidth: `${(viewMode === "teachers" ? teachers.length : groups.length) * 160 + 120}px` }}
           >
             <thead>
               <tr>
                 <th className="sticky left-0 z-20 bg-zinc-50 dark:bg-zinc-900 border-b border-r border-zinc-200 dark:border-zinc-800 p-3 text-left w-28 min-w-[112px]">
                   <span className="text-[10px] font-semibold uppercase tracking-widest text-zinc-400">Время</span>
                 </th>
-                {teachers.map(t => (
+                {viewMode === "teachers" ? teachers.map(t => (
                   <th
                     key={t.id}
                     className="border-b border-r border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 p-2.5 text-center min-w-[160px]"
@@ -437,6 +491,18 @@ export default function ScheduleConstructor({ onClose }: Props) {
                       <div>
                         <span className="block text-sm font-semibold text-zinc-800 dark:text-zinc-200 leading-tight">{t.name}</span>
                         <span className="block text-[11px] text-zinc-400 dark:text-zinc-500 leading-tight">{t.surname}</span>
+                      </div>
+                    </div>
+                  </th>
+                )) : groups.map(g => (
+                  <th
+                    key={g.id}
+                    className="border-b border-r border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 p-2.5 text-center min-w-[160px]"
+                  >
+                    <div className="flex flex-col items-center gap-1.5">
+                      <GroupPersonAvatar groupName={g.name} avatarUrl={g.avatar_url} size={28} showTooltip={false} />
+                      <div>
+                        <span className="block text-sm font-semibold text-zinc-800 dark:text-zinc-200 leading-tight">{g.name}</span>
                       </div>
                     </div>
                   </th>
@@ -451,11 +517,12 @@ export default function ScheduleConstructor({ onClose }: Props) {
                     <div className="text-[10px] text-zinc-400 mt-0.5 tabular-nums">{slot.end_time}</div>
                     <div className="text-[10px] text-zinc-500 font-medium mt-0.5">{slot.label}</div>
                   </td>
-                  {teachers.map(teacher => {
-                    const entry = getCell(teacher.id, slot.id);
-                    const droppableId = `${teacher.id}_${slot.id}`;
+                  {/* Columns */}
+                  {(viewMode === "teachers" ? teachers : groups).map(col => {
+                    const entry = getCell(col.id, slot.id);
+                    const droppableId = `${col.id}_${slot.id}`;
                     return (
-                      <td key={teacher.id} className="border-b border-r border-zinc-200 dark:border-zinc-800 p-1.5 align-top">
+                      <td key={col.id} className="border-b border-r border-zinc-200 dark:border-zinc-800 p-1.5 align-top">
                         <Droppable droppableId={droppableId}>
                           {(provided, snapshot) => (
                             <div
@@ -497,13 +564,13 @@ export default function ScheduleConstructor({ onClose }: Props) {
                                       >
                                         <X className="h-3 w-3" />
                                       </button>
-                                      {/* Group name (bold) */}
+                                      {/* Primary info (bold) */}
                                       <p className={`text-xs font-bold leading-tight pr-4 truncate ${
                                         dragSnapshot.isDragging
                                           ? "text-zinc-100 dark:text-zinc-900"
                                           : "text-zinc-900 dark:text-zinc-100"
                                       }`}>
-                                        {entry.group_name || entry.custom_label || "Сводная"}
+                                        {viewMode === "teachers" ? (entry.group_name || entry.custom_label || "Сводная") : entry.teacher_name}
                                       </p>
                                       {/* Subject (secondary) */}
                                       <p className={`text-[11px] leading-tight mt-0.5 truncate ${
@@ -518,7 +585,7 @@ export default function ScheduleConstructor({ onClose }: Props) {
                                 </Draggable>
                               ) : (
                                 <button
-                                  onClick={() => openAdd(teacher.id, slot.id)}
+                                  onClick={() => openAdd(col.id, slot.id)}
                                   className="w-full min-h-[76px] flex items-center justify-center rounded-md border-2 border-dashed border-zinc-100 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-all group"
                                 >
                                   <Plus className="h-3.5 w-3.5 text-zinc-200 group-hover:text-zinc-400 dark:text-zinc-700 dark:group-hover:text-zinc-500 transition-colors" />
@@ -581,7 +648,7 @@ export default function ScheduleConstructor({ onClose }: Props) {
                   <Select value={formGroup} onValueChange={setFormGroup}>
                     <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Выберите группу" /></SelectTrigger>
                     <SelectContent>
-                      {groups.map(g => <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>)}
+                      {groups.map(g => <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} avatarUrl={g.avatar_url} size={18} showTooltip={false} />{g.name}</span></SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
@@ -632,7 +699,12 @@ export default function ScheduleConstructor({ onClose }: Props) {
                         <label key={s.id} className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
                           <Checkbox checked={selectedStudentIds.includes(s.id)} onCheckedChange={() => toggleStudent(s.id)} />
                           <span className="text-xs flex-1 truncate">{s.full_name}</span>
-                          {s.group_name && <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">{s.group_name}</Badge>}
+                          {s.group_name && (
+                            <Badge variant="outline" className="text-[9px] flex w-max items-center gap-1 px-1.5 py-0.5 shrink-0">
+                              <GroupPersonAvatar groupName={s.group_name} avatarUrl={s.group_avatar} size={10} showTooltip={false} />
+                              {s.group_name}
+                            </Badge>
+                          )}
                         </label>
                       ))}
                     </div>

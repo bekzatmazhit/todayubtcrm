@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ClipboardCheck, Search, ChevronDown, ChevronUp, FileText, Users, TrendingUp } from "lucide-react";
+import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { fetchQuizzes, fetchGroups, fetchSubjects } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
@@ -171,7 +172,12 @@ export default function GradesPage() {
                       <TableCell className="hidden sm:table-cell text-sm">{q.subject_name || "—"}</TableCell>
                       <TableCell className="hidden md:table-cell text-sm text-muted-foreground">{q.teacher_name || "—"}</TableCell>
                       <TableCell className="hidden sm:table-cell">
-                        {q.group_name ? <Badge variant="outline" className="text-xs">{q.group_name}</Badge> : "—"}
+                        {q.group_name ? (
+                          <Badge variant="outline" className="text-xs flex w-max items-center gap-1.5 px-2 py-0.5">
+                            <GroupPersonAvatar groupName={q.group_name} avatarUrl={q.group_avatar} size={14} showTooltip={false} />
+                            {q.group_name}
+                          </Badge>
+                        ) : "—"}
                       </TableCell>
                       <TableCell className="text-center">
                         <span className="font-semibold text-sm">{s.avg}</span>

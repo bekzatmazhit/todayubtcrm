@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { useTranslation } from "react-i18next";
 import {
@@ -6,7 +6,7 @@ import {
   Plus, Search, Pencil, Trash2, X, ChevronRight, ShieldAlert,
   Phone, Mail, User, Building2, BookMarked, Check, CalendarDays, KeyRound,
   Megaphone, Info, AlertTriangle, AlertCircle, Power, Activity,
-  Server, Database, HardDrive, Cpu, RefreshCw, CircleCheck, ScrollText, Shield,
+  Server, Database, HardDrive, Cpu, RefreshCw, CircleCheck, ScrollText, Shield, Archive, Upload, CheckSquare, Square, Undo2, Image
 } from "lucide-react";
 import ScheduleConstructor from "@/components/ScheduleConstructor";
 import { Button } from "@/components/ui/button";
@@ -26,8 +26,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   fetchUsers, createUser, updateUser, deleteUser,
-  fetchStudents, createStudent, updateStudent, deleteStudent,
-  fetchGroups, createGroup, updateGroup, deleteGroup,
+  fetchStudents, createStudent, updateStudent, deleteStudent, archiveStudent, bulkArchiveStudents,
+  fetchGroups, fetchAllGroups, createGroup, updateGroup, deleteGroup, hardDeleteGroup, uploadGroupAvatar, deleteGroupAvatar,
   fetchSubjects, createSubject, updateSubject, deleteSubject,
   fetchProfiles,
   fetchAllBanners, createBanner, updateBanner, deleteBanner,
@@ -36,6 +36,7 @@ import {
 } from "@/lib/api";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
+import { BulkImportModal } from "@/components/BulkImportModal";
 
 //  helpers 
 
@@ -142,8 +143,8 @@ function SearchBar({ value, onChange, placeholder }: { value: string; onChange: 
 const ROLES = ["teacher", "umo_head", "admin"];
 const ROLE_LABELS: Record<string, string> = { teacher: "Устаз", umo_head: "УМО", admin: "Админ" };
 
-type UserForm = { name: string; surname: string; phone: string; email: string; role: string };
-const emptyUser = (): UserForm => ({ name: "", surname: "", phone: "", email: "", role: "teacher" });
+type UserForm = { name: string; surname: string; phone: string; email: string; role: string; avatar_url: string };
+const emptyUser = (): UserForm => ({ name: "", surname: "", phone: "", email: "", role: "teacher", avatar_url: "" });
 
 function UsersTab({ toast }: { toast: ReturnType<typeof useToast>["toast"] }) {
   const [users, setUsers] = useState<any[]>([]);
@@ -182,7 +183,7 @@ function UsersTab({ toast }: { toast: ReturnType<typeof useToast>["toast"] }) {
   }
 
   function openEdit(u: any) {
-    setForm({ name: u.name, surname: u.surname, phone: u.phone ? formatPhone(u.phone) : "", email: u.email ?? "", role: u.role });
+    setForm({ name: u.name, surname: u.surname, phone: u.phone ? formatPhone(u.phone) : "", email: u.email ?? "", role: u.role, avatar_url: u.avatar_url ?? "" });
     setSheet({ open: true, user: u });
   }
 
@@ -259,7 +260,7 @@ function UsersTab({ toast }: { toast: ReturnType<typeof useToast>["toast"] }) {
           ) : filtered.map((u) => (
             <div key={u.id} className="flex items-center gap-3 p-3 rounded-xl bg-card border hover:border-primary/30 transition-colors group">
               <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-semibold shrink-0 ${avatarColor(u.id)}`}>
-                {initials(u.name, u.surname)}
+                {u.avatar_url ? <img src={u.avatar_url} className="w-full h-full object-cover rounded-full" alt="avatar" /> : initials(u.name, u.surname)}
               </div>
               <div className="flex-1 min-w-0">
                 <p className="font-medium text-sm truncate">{u.name} {u.surname}</p>
@@ -317,6 +318,10 @@ function UsersTab({ toast }: { toast: ReturnType<typeof useToast>["toast"] }) {
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>{ROLES.map((r) => <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>)}</SelectContent>
                 </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs flex items-center gap-1.5"><Image className="h-3.5 w-3.5" />Ссылка на аватар (URL)</Label>
+                <Input placeholder="https://example.com/avatar.jpg" value={form.avatar_url} onChange={(e) => setForm({ ...form, avatar_url: e.target.value })} />
               </div>
               {!sheet.user && (
                 <p className="text-xs text-muted-foreground bg-muted/60 rounded-lg px-3 py-2">
@@ -379,8 +384,8 @@ function UsersTab({ toast }: { toast: ReturnType<typeof useToast>["toast"] }) {
 //  STUDENTS SECTION
 // 
 
-type StudentForm = { full_name: string; phone: string; parent_phone: string; group_id: string; status: string };
-const emptyStudent = (): StudentForm => ({ full_name: "", phone: "", parent_phone: "", group_id: "", status: "active" });
+type StudentForm = { full_name: string; phone: string; parent_phone: string; parent_name: string; group_id: string; status: string };
+const emptyStudent = (): StudentForm => ({ full_name: "", phone: "", parent_phone: "", parent_name: "", group_id: "", status: "active" });
 
 function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["toast"]; groups: any[] }) {
   const [students, setStudents] = useState<any[]>([]);
@@ -393,6 +398,41 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
   const [saving, setSaving] = useState(false);
   const [confirmDel, setConfirmDel] = useState<any | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [bulkArchiveOpen, setBulkArchiveOpen] = useState(false);
+  const [gradYear, setGradYear] = useState("");
+
+  const handleToggleSelect = (id: number) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+  const handleSelectAll = (checked: boolean) => {
+    setSelectedIds(checked ? filtered.map(s => s.id) : []);
+  };
+  const handleBulkArchive = async () => {
+    if (!gradYear) return toast({ title: "Ошибка", description: "Укажите причину (например, Выпуск 2026)" });
+    try {
+      await bulkArchiveStudents({ studentIds: selectedIds, graduation_year: gradYear });
+      toast({ title: "Успех", description: `Учеников в архиве: ${selectedIds.length}` });
+      setBulkArchiveOpen(false);
+      setSelectedIds([]);
+      await load();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Ошибка", description: e.message });
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!confirm("Вы уверены, что хотите НАВСЕГДА удалить выбранных учеников?")) return;
+    try {
+      for (const id of selectedIds) await deleteStudent(id);
+      toast({ title: "Удалено", description: "Выбранные ученики удалены" });
+      setSelectedIds([]);
+      await load();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Ошибка", description: e.message });
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -405,7 +445,7 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return students.filter((s) => {
-      const match = (s.full_name + " " + (s.phone ?? "") + " " + (s.parent_phone ?? "")).toLowerCase().includes(q);
+      const match = (s.full_name + " " + (s.phone ?? "") + " " + (s.parent_phone ?? "") + " " + (s.parent_name ?? "")).toLowerCase().includes(q);
       const grpMatch = groupFilter === "all" || String(s.group_id) === groupFilter;
       const stMatch = statusFilter === "all" || s.status === statusFilter;
       return match && grpMatch && stMatch;
@@ -414,7 +454,7 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
 
   function openCreate() { setForm(emptyStudent()); setSheet({ open: true }); }
   function openEdit(s: any) {
-    setForm({ full_name: s.full_name, phone: s.phone ? formatPhone(s.phone) : "", parent_phone: s.parent_phone ? formatPhone(s.parent_phone) : "", group_id: s.group_id ? String(s.group_id) : "", status: s.status });
+    setForm({ full_name: s.full_name, phone: s.phone ? formatPhone(s.phone) : "", parent_phone: s.parent_phone ? formatPhone(s.parent_phone) : "", parent_name: s.parent_name ?? "", group_id: s.group_id ? String(s.group_id) : "", status: s.status });
     setSheet({ open: true, student: s });
   }
 
@@ -437,16 +477,26 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
     } finally { setSaving(false); }
   }
 
-  async function handleDelete() {
+  async function handleArchive() {
     if (!confirmDel) return;
     setDeleting(true);
     try {
-      await deleteStudent(confirmDel.id);
-      toast({ title: "Удалено", description: `${confirmDel.full_name} удалён` });
+      await archiveStudent(confirmDel.id);
+      toast({ title: "Ученик перенесен в архив" });
       await load();
     } catch (e: any) {
       toast({ variant: "destructive", title: "Ошибка", description: e.message });
     } finally { setDeleting(false); setConfirmDel(null); }
+  }
+
+  async function handleRestore(s: any) {
+    try {
+      await updateStudent(s.id, { ...s, status: "active" });
+      toast({ title: "Ученик восстановлен из архива" });
+      await load();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Ошибка", description: e.message });
+    }
   }
 
   return (
@@ -459,7 +509,7 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
           <SelectTrigger className="w-40 h-9"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Все группы</SelectItem>
-            {groups.map((g) => <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>)}
+            {groups.map((g) => <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} avatarUrl={g.avatar_url} size={18} showTooltip={false} />{g.name}</span></SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -467,18 +517,41 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
           <SelectContent>
             <SelectItem value="all">Все статусы</SelectItem>
             <SelectItem value="active">Активные</SelectItem>
-            <SelectItem value="archive">Архив</SelectItem>
+            <SelectItem value="archived">Архив</SelectItem>
           </SelectContent>
         </Select>
+        <Button size="sm" variant="outline" className="gap-1.5 h-9" onClick={() => setImportModalOpen(true)}>
+          <Upload className="h-4 w-4" />Импорт
+        </Button>
         <Button size="sm" className="gap-1.5 h-9" onClick={openCreate}>
           <Plus className="h-4 w-4" />Добавить
         </Button>
       </div>
 
+      {selectedIds.length > 0 && (
+        <div className="flex items-center justify-between p-3 bg-muted/50 rounded-xl border animate-in fade-in slide-in-from-top-2">
+          <span className="text-sm font-medium">Выбрано учеников: {selectedIds.length}</span>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setBulkArchiveOpen(true)} className="gap-2 text-amber-600 hover:text-amber-700 hover:bg-amber-50">
+              <Archive className="h-4 w-4" /> В папку (Архив)
+            </Button>
+            <Button size="sm" variant="outline" onClick={handleBulkDelete} className="gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive">
+              <Trash2 className="h-4 w-4" /> Удалить
+            </Button>
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div className="space-y-2">{[...Array(6)].map((_, i) => <Skeleton key={i} className="h-14 rounded-xl" />)}</div>
       ) : (
         <div className="space-y-1.5">
+          {filtered.length > 0 && (
+            <div className="flex items-center gap-2 px-3 pb-2 text-xs font-medium text-muted-foreground">
+              <Checkbox checked={selectedIds.length === filtered.length && filtered.length > 0} onCheckedChange={handleSelectAll} />
+              <span className="ml-2">Выбрать всех</span>
+            </div>
+          )}
           {filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground/50">
               <GraduationCap className="h-10 w-10 mb-3" />
@@ -488,16 +561,20 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
             const grp = groups.find((g) => g.id === s.group_id);
             return (
               <div key={s.id} className="flex items-center gap-3 p-3 rounded-xl bg-card border hover:border-primary/30 transition-colors group">
+                <Checkbox checked={selectedIds.includes(s.id)} onCheckedChange={() => handleToggleSelect(s.id)} />
                 <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0 ${avatarColor(s.id)}`}>
-                  {s.full_name.split(" ").map((w: string) => w[0]).slice(0, 2).join("")}
+                  {s.avatar_url ? <img src={s.avatar_url} className="w-full h-full object-cover rounded-full" alt="avatar" /> : s.full_name.split(" ").map((w: string) => w[0]).slice(0, 2).join("")}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <p className="font-medium text-sm truncate">{s.full_name}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-medium text-sm leading-none">{s.full_name}</p>
+                          {s.status === 'archived' && <Badge variant="secondary" className="text-[9px] px-1.5 bg-muted text-muted-foreground">Архив</Badge>}
+                        </div>
                     {statusBadge(s.status)}
                   </div>
                   <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground flex-wrap">
-                    {grp && <span className="inline-flex items-center gap-1"><Building2 className="h-3 w-3" />{grp.name}</span>}
+                    {grp && <span className="inline-flex items-center gap-1"><GroupPersonAvatar groupName={grp.name} avatarUrl={grp.avatar_url} size={14} showTooltip={false} />{grp.name}</span>}
                     {s.phone && <span>{s.phone}</span>}
                     {s.parent_phone && <span>Родитель: {s.parent_phone}</span>}
                   </div>
@@ -506,9 +583,15 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
                   <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-primary/10" onClick={() => openEdit(s)}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-destructive/10 text-destructive" onClick={() => setConfirmDel(s)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  {s.status === 'archived' ? (
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-green-600 hover:bg-green-50" onClick={() => handleRestore(s)} title="Восстановить">
+                      <Undo2 className="h-3.5 w-3.5" />
+                    </Button>
+                  ) : (
+                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-amber-100 text-amber-600" onClick={() => setConfirmDel(s)} title="В архив">
+                      <Archive className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
             );
@@ -522,39 +605,52 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
             <SheetTitle>{sheet.student ? "Редактировать ученика" : "Добавить ученика"}</SheetTitle>
           </SheetHeader>
           <ScrollArea className="flex-1 mt-6">
-            <div className="space-y-4 pr-1">
-              <div className="space-y-1">
-                <Label className="text-xs">ФИО *</Label>
-                <Input placeholder="Фамилия Имя Отчество" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-5 pr-1">
+              <div className="p-4 bg-muted/40 rounded-xl space-y-4 border border-border/50">
+                <h4 className="text-sm font-semibold flex items-center gap-2"><User className="h-4 w-4 text-primary" /> Основная информация</h4>
                 <div className="space-y-1">
-                  <Label className="text-xs flex items-center gap-1.5"><Phone className="h-3.5 w-3.5" />Телефон</Label>
-                  <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: formatPhone(e.target.value) })} />
+                  <Label className="text-xs">ФИО *</Label>
+                  <Input placeholder="Фамилия Имя Отчество" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} className="bg-background" />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs">Тел. родителя</Label>
-                  <Input value={form.parent_phone} onChange={(e) => setForm({ ...form, parent_phone: formatPhone(e.target.value) })} />
+                  <Label className="text-xs flex items-center gap-1.5"><Phone className="h-3.5 w-3.5 text-muted-foreground" />Телефон ученика</Label>
+                  <Input placeholder="+7 (...)" value={form.phone} onChange={(e) => setForm({ ...form, phone: formatPhone(e.target.value) })} className="bg-background" />
                 </div>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" />Группа</Label>
-                <Select value={form.group_id} onValueChange={(v) => setForm({ ...form, group_id: v })}>
-                  <SelectTrigger><SelectValue placeholder="Выбрать группу" /></SelectTrigger>
-                  <SelectContent>
-                    {groups.map((g) => <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} size={18} showTooltip={false} />{g.name}</span></SelectItem>)}
-                  </SelectContent>
-                </Select>
+
+              <div className="p-4 bg-muted/40 rounded-xl space-y-4 border border-border/50">
+                <h4 className="text-sm font-semibold flex items-center gap-2"><UsersRound className="h-4 w-4 text-primary" /> Родители</h4>
+                <div className="space-y-1">
+                  <Label className="text-xs">Имя родителя</Label>
+                  <Input placeholder="ФИО родителя" value={form.parent_name} onChange={(e) => setForm({ ...form, parent_name: e.target.value })} className="bg-background" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs flex items-center gap-1.5"><Phone className="h-3.5 w-3.5 text-muted-foreground" />Телефон родителя</Label>
+                  <Input placeholder="+7 (...)" value={form.parent_phone} onChange={(e) => setForm({ ...form, parent_phone: formatPhone(e.target.value) })} className="bg-background" />
+                </div>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Статус</Label>
-                <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="active">Активный</SelectItem>
-                    <SelectItem value="archive">Архив</SelectItem>
-                  </SelectContent>
-                </Select>
+
+              <div className="p-4 bg-muted/40 rounded-xl space-y-4 border border-border/50">
+                <h4 className="text-sm font-semibold flex items-center gap-2"><Building2 className="h-4 w-4 text-primary" /> Учеба</h4>
+                <div className="space-y-1">
+                  <Label className="text-xs">Группа</Label>
+                  <Select value={form.group_id} onValueChange={(v) => setForm({ ...form, group_id: v })}>
+                    <SelectTrigger className="bg-background"><SelectValue placeholder="Выбрать группу" /></SelectTrigger>
+                    <SelectContent>
+                      {groups.map((g) => <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} avatarUrl={g.avatar_url} size={18} showTooltip={false} />{g.name}</span></SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Статус</Label>
+                  <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+                    <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">Активный</SelectItem>
+                      <SelectItem value="archived">Архив</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </div>
           </ScrollArea>
@@ -570,12 +666,35 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
 
       <ConfirmDialog
         open={!!confirmDel}
-        title="Удалить ученика?"
-        description={`${confirmDel?.full_name} будет удалён из базы данных. Архивирование невозможно через данный диалог.`}
-        onConfirm={handleDelete}
+        title="Архивировать ученика?"
+        description={`${confirmDel?.full_name} будет перенесен в архив (он не будет отображаться в активных списках).`}
+        onConfirm={handleArchive}
         onCancel={() => setConfirmDel(null)}
         loading={deleting}
       />
+
+      <Dialog open={bulkArchiveOpen} onOpenChange={setBulkArchiveOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Перенос в папку (Архив)</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <p className="text-sm text-muted-foreground">
+              Выбрано учеников: <strong>{selectedIds.length}</strong>. Укажите папку (например, "Выпуск 2026", "Отчислен", "Перевод"), чтобы перенести их туда и скрыть из активного списка.
+            </p>
+            <div className="space-y-2">
+              <Label>Папка / Причина архивации</Label>
+              <Input placeholder="Например: Выпуск 2026" value={gradYear} onChange={(e) => setGradYear(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkArchiveOpen(false)}>Отмена</Button>
+            <Button onClick={handleBulkArchive} className="gap-2 bg-amber-600 hover:bg-amber-700">Перенести в архив</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <BulkImportModal open={importModalOpen} onOpenChange={setImportModalOpen} onSuccess={load} />
     </div>
   );
 }
@@ -584,22 +703,25 @@ function StudentsTab({ toast, groups }: { toast: ReturnType<typeof useToast>["to
 //  GROUPS SECTION
 // 
 
-type GroupForm = { name: string; profile_id: string; curator_id: string };
-const emptyGroup = (): GroupForm => ({ name: "", profile_id: "", curator_id: "" });
+type GroupForm = { name: string; profile_id: string; curator_id: string; avatar_url: string };
+const emptyGroup = (): GroupForm => ({ name: "", profile_id: "", curator_id: "", avatar_url: "" });
 
 function GroupsTab({ toast, users, profiles }: { toast: ReturnType<typeof useToast>["toast"]; users: any[]; profiles: any[] }) {
   const [groups, setGroups] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [sheet, setSheet] = useState<{ open: boolean; group?: any }>({ open: false });
   const [form, setForm] = useState<GroupForm>(emptyGroup());
   const [saving, setSaving] = useState(false);
   const [confirmDel, setConfirmDel] = useState<any | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+
 
   const load = useCallback(async () => {
     setLoading(true);
-    setGroups(await fetchGroups());
+    setGroups(await fetchAllGroups());
     setLoading(false);
   }, []);
 
@@ -607,14 +729,18 @@ function GroupsTab({ toast, users, profiles }: { toast: ReturnType<typeof useToa
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return groups.filter((g) => (g.name + " " + (g.curator_name ?? "")).toLowerCase().includes(q));
-  }, [groups, search]);
+    return groups.filter((g) => {
+      const match = (g.name + " " + (g.curator_name ?? "")).toLowerCase().includes(q);
+      const statusMatch = statusFilter === "all" || g.status === statusFilter;
+      return match && statusMatch;
+    });
+  }, [groups, search, statusFilter]);
 
   const teachers = users.filter((u) => u.role === "teacher" || u.role === "umo_head" || u.role === "admin");
 
   function openCreate() { setForm(emptyGroup()); setSheet({ open: true }); }
   function openEdit(g: any) {
-    setForm({ name: g.name, profile_id: g.profile_id ? String(g.profile_id) : "", curator_id: g.curator_id ? String(g.curator_id) : "" });
+    setForm({ name: g.name, profile_id: g.profile_id ? String(g.profile_id) : "", curator_id: g.curator_id ? String(g.curator_id) : "", avatar_url: g.avatar_url || "" });
     setSheet({ open: true, group: g });
   }
 
@@ -622,7 +748,7 @@ function GroupsTab({ toast, users, profiles }: { toast: ReturnType<typeof useToa
     if (!form.name.trim()) return;
     setSaving(true);
     try {
-      const data = { name: form.name, profile_id: form.profile_id ? parseInt(form.profile_id) : null, curator_id: form.curator_id ? parseInt(form.curator_id) : null };
+      const data = { name: form.name, profile_id: form.profile_id ? parseInt(form.profile_id) : null, curator_id: form.curator_id ? parseInt(form.curator_id) : null, avatar_url: form.avatar_url || null };
       if (sheet.group) {
         await updateGroup(sheet.group.id, data);
         toast({ title: "Группа обновлена", description: form.name });
@@ -642,23 +768,92 @@ function GroupsTab({ toast, users, profiles }: { toast: ReturnType<typeof useToa
     setDeleting(true);
     try {
       await deleteGroup(confirmDel.id);
-      toast({ title: "Группа удалена" });
+      toast({ title: "Группа перемещена в архив" });
       await load();
     } catch (e: any) {
       toast({ variant: "destructive", title: "Ошибка", description: e.message });
     } finally { setDeleting(false); setConfirmDel(null); }
   }
 
+  async function handleRestore(g: any) {
+    try {
+      await updateGroup(g.id, { ...g, status: "active" });
+      toast({ title: "Группа восстановлена из архива" });
+      await load();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Ошибка", description: e.message });
+    }
+  }
+
+  const handleToggleSelect = (id: number) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+  const handleSelectAll = (checked: boolean) => {
+    setSelectedIds(checked ? filtered.map(g => g.id) : []);
+  };
+  
+  const handleBulkArchive = async () => {
+    if (!confirm(`Вы уверены, что хотите отправить в архив ${selectedIds.length} групп?`)) return;
+    try {
+      for (const id of selectedIds) await deleteGroup(id);
+      toast({ title: "Успех", description: `Групп отправлено в архив: ${selectedIds.length}` });
+      setSelectedIds([]);
+      await load();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Ошибка", description: e.message });
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!confirm("Вы уверены, что хотите НАВСЕГДА удалить выбранные группы?")) return;
+    try {
+      for (const id of selectedIds) await hardDeleteGroup(id);
+      toast({ title: "Удалено", description: "Выбранные группы удалены навсегда" });
+      setSelectedIds([]);
+      await load();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Ошибка", description: e.message });
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <div className="flex-1">
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex-1 min-w-48">
           <SearchBar value={search} onChange={setSearch} placeholder="Поиск по названию или куратору" />
         </div>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="w-40 h-9"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Все статусы</SelectItem>
+            <SelectItem value="active">Активные</SelectItem>
+            <SelectItem value="archived">В архиве</SelectItem>
+          </SelectContent>
+        </Select>
+        {selectedIds.length > 0 && (
+          <>
+            <Button size="sm" variant="outline" className="h-9 gap-1.5 border-destructive text-destructive hover:bg-destructive hover:text-white" onClick={handleBulkDelete}>
+              <Trash2 className="h-4 w-4" />Удалить ({selectedIds.length})
+            </Button>
+            <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={handleBulkArchive}>
+              <Archive className="h-4 w-4" />В архив ({selectedIds.length})
+            </Button>
+          </>
+        )}
         <Button size="sm" className="gap-1.5 h-9" onClick={openCreate}>
           <Plus className="h-4 w-4" />Добавить
         </Button>
       </div>
+
+      {filtered.length > 0 && !loading && (
+        <div className="flex items-center gap-2 px-1 mb-2 mt-4">
+          <Checkbox 
+            checked={selectedIds.length > 0 && selectedIds.length === filtered.length} 
+            onCheckedChange={handleSelectAll} 
+          />
+          <span className="text-xs text-muted-foreground cursor-pointer select-none" onClick={() => handleSelectAll(selectedIds.length !== filtered.length)}>Выбрать все</span>
+        </div>
+      )}
 
       {loading ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{[...Array(6)].map((_, i) => <Skeleton key={i} className="h-28 rounded-xl" />)}</div>
@@ -672,17 +867,34 @@ function GroupsTab({ toast, users, profiles }: { toast: ReturnType<typeof useToa
           ) : filtered.map((g) => {
             const curator = g.curator_id ? users.find((u) => u.id === g.curator_id) : null;
             return (
-              <Card key={g.id} className="border hover:border-primary/40 hover:shadow-md transition-all group cursor-pointer" onClick={() => openEdit(g)}>
+              <Card key={g.id} className={`border hover:border-primary/40 hover:shadow-md transition-all group cursor-pointer ${selectedIds.includes(g.id) ? 'ring-2 ring-primary border-primary' : ''}`} onClick={() => openEdit(g)}>
                 <CardContent className="p-4 flex items-start gap-3">
+                  <div className="pt-2" onClick={(e) => e.stopPropagation()}>
+                    <Checkbox 
+                      checked={selectedIds.includes(g.id)} 
+                      onCheckedChange={() => handleToggleSelect(g.id)}
+                    />
+                  </div>
                   <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-                    <Building2 className="h-5 w-5 text-primary" />
+                    {g.avatar_url ? (
+                      <img src={g.avatar_url} alt={g.name} className="w-full h-full object-cover rounded-xl" />
+                    ) : (
+                      <Building2 className="h-5 w-5 text-primary" />
+                    )}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-1">
-                      <p className="font-semibold text-sm">{g.name}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="font-semibold text-sm">{g.name}</p>
+                        {g.status === 'archived' && <Badge variant="secondary" className="text-[9px] px-1.5 bg-muted text-muted-foreground">Архив</Badge>}
+                      </div>
                       <div className="flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(g)}><Pencil className="h-3 w-3" /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setConfirmDel(g)}><Trash2 className="h-3 w-3" /></Button>
+                        {g.status === 'archived' ? (
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-green-600" onClick={() => handleRestore(g)} title="Восстановить"><Undo2 className="h-3 w-3" /></Button>
+                        ) : (
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setConfirmDel(g)} title="В архив"><Trash2 className="h-3 w-3" /></Button>
+                        )}
                       </div>
                     </div>
                     {g.profile_name && <p className="text-xs text-muted-foreground mt-0.5">{g.profile_name}</p>}
@@ -718,6 +930,11 @@ function GroupsTab({ toast, users, profiles }: { toast: ReturnType<typeof useToa
                 <Label className="text-xs">Название группы *</Label>
                 <Input placeholder="Например: 11 ФМ-1" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
+              
+              <div className="space-y-1">
+                <Label className="text-xs">Ссылка на логотип (URL)</Label>
+                <Input value={form.avatar_url} onChange={(e) => setForm({ ...form, avatar_url: e.target.value })} placeholder="https://example.com/logo.png" />
+              </div>
               <div className="space-y-1">
                 <Label className="text-xs">Профиль</Label>
                 <Select value={form.profile_id} onValueChange={(v) => setForm({ ...form, profile_id: v })}>
@@ -739,7 +956,7 @@ function GroupsTab({ toast, users, profiles }: { toast: ReturnType<typeof useToa
                         className={`w-full flex items-center gap-3 px-3 py-2.5 hover:bg-muted/60 transition-colors text-left ${form.curator_id === String(u.id) ? "bg-primary/10" : ""}`}
                         onClick={() => setForm({ ...form, curator_id: form.curator_id === String(u.id) ? "" : String(u.id) })}>
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0 ${avatarColor(u.id)}`}>
-                          {initials(u.name, u.surname)}
+                          {u.avatar_url ? <img src={u.avatar_url} className="w-full h-full object-cover rounded-full" alt="avatar" /> : initials(u.name, u.surname)}
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium truncate">{u.name} {u.surname}</p>
@@ -963,7 +1180,7 @@ export default function AdminPage() {
   useEffect(() => {
     async function loadAll() {
       setStatsLoading(true);
-      const [u, g, s, p, subj] = await Promise.all([fetchUsers(), fetchGroups(), fetchStudents(), fetchProfiles(), fetchSubjects()]);
+      const [u, g, s, p, subj] = await Promise.all([fetchUsers(), fetchAllGroups(), fetchStudents(), fetchProfiles(), fetchSubjects()]);
       setUsers(u); setGroups(g); setStudents(s); setProfiles(p); setSubjects(subj);
       setStatsLoading(false);
     }

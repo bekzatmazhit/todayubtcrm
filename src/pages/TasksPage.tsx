@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Card, CardContent } from "@/components/ui/card";
+import { BACKEND_ORIGIN } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -484,7 +485,7 @@ function TaskDetailDialog({
                     <div key={a.id} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5">
                       <Paperclip className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                       <span className="text-xs flex-1 truncate">{a.original_name}</span>
-                      <a href={`http://localhost:3001${a.path}`} target="_blank" rel="noopener noreferrer">
+                      <a href={`${BACKEND_ORIGIN}${a.path}`} target="_blank" rel="noopener noreferrer">
                         <Button variant="ghost" size="icon" className="h-6 w-6"><Download className="h-3 w-3" /></Button>
                       </a>
                       {canDelete && (

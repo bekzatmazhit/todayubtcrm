@@ -25,10 +25,28 @@ const AuthContext = createContext<AuthContextType | null>(null);
 const rawApiBase = import.meta.env.VITE_API_URL;
 const API_BASE = rawApiBase ? rawApiBase.replace(/\/$/, "") : "/api";
 
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 дней
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem("today_crm_user");
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem("today_crm_user");
+      if (!saved) return null;
+      const parsed = JSON.parse(saved);
+      // Проверяем срок жизни сессии
+      const lastLogin = localStorage.getItem("today_crm_last_login");
+      if (lastLogin) {
+        const { timestamp } = JSON.parse(lastLogin);
+        if (Date.now() - timestamp > SESSION_TTL_MS) {
+          localStorage.removeItem("today_crm_user");
+          localStorage.removeItem("today_crm_last_login");
+          return null;
+        }
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
   });
 
   const login = useCallback(async (email: string, password: string) => {
@@ -74,6 +92,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     setUser(null);
     localStorage.removeItem("today_crm_user");
+  }, []);
+
+  // Глобальный интерцептор fetch: авто-логаут при 401
+  useEffect(() => {
+    const origFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const response = await origFetch(...args);
+      if (response.status === 401) {
+        // Сбрасываем сессию без повторного запроса на /api/logout
+        setUser(null);
+        localStorage.removeItem("today_crm_user");
+        localStorage.removeItem("today_crm_last_login");
+      }
+      return response;
+    };
+    return () => { window.fetch = origFetch; };
   }, []);
 
   const updateAvatar = useCallback((avatar_url: string | null) => {

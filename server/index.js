@@ -188,27 +188,31 @@ app.get("/api/users/:id", (req, res) => {
 
 app.get("/api/groups", (req, res) => {
   try {
+    const { status } = req.query;
+    const statusFilter = status || 'active';
+    const statusCondition = statusFilter === 'all' ? '' : 'WHERE g.status = ?';
+    const params = statusFilter === 'all' ? [] : [statusFilter];
     const groups = db.prepare(`
-      SELECT g.id, g.name, g.profile_id, g.curator_id,
+      SELECT g.id, g.name, g.profile_id, g.curator_id, g.status, g.avatar_url,
              p.name as profile_name,
              u.name || ' ' || u.surname as curator_name,
-             COUNT(s.id) as students_count
+             (SELECT COUNT(*) FROM students s2 WHERE s2.group_id = g.id AND s2.status = 'active') as students_count
       FROM groups g
       LEFT JOIN profiles p ON g.profile_id = p.id
       LEFT JOIN users u ON g.curator_id = u.id
-      LEFT JOIN students s ON s.group_id = g.id
-      GROUP BY g.id, g.name, g.profile_id, p.name, g.curator_id, u.name, u.surname
+      ${statusCondition}
+      GROUP BY g.id, g.name, g.profile_id, p.name, g.curator_id, u.name, u.surname, g.avatar_url
       ORDER BY g.id
-    `).all();
+    `).all(...params);
     res.json(groups);
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.post("/api/groups", (req, res) => {
   try {
-    const { name, profile_id, curator_id } = req.body;
+    const { name, profile_id, curator_id, avatar_url } = req.body;
     if (!name) return res.status(400).json({ error: "Group name is required" });
-    const result = db.prepare("INSERT INTO groups (name, profile_id, curator_id) VALUES (?, ?, ?)").run(name, profile_id || null, curator_id || null);
+    const result = db.prepare("INSERT INTO groups (name, profile_id, curator_id, avatar_url) VALUES (?, ?, ?, ?)").run(name, profile_id || null, curator_id || null, avatar_url || null);
     logAction(req, { action: "create", entityType: "group", entityId: result.lastInsertRowid, entityName: name, details: JSON.stringify({ profile_id, curator_id }) });
     res.json({ id: result.lastInsertRowid, name });
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -216,9 +220,20 @@ app.post("/api/groups", (req, res) => {
 
 app.put("/api/groups/:id", (req, res) => {
   try {
-    const { name, profile_id, curator_id } = req.body;
-    db.prepare("UPDATE groups SET name = COALESCE(?, name), profile_id = COALESCE(?, profile_id), curator_id = COALESCE(?, curator_id) WHERE id = ?")
-      .run(name || null, profile_id || null, curator_id || null, req.params.id);
+    const { name, profile_id, curator_id, status, avatar_url } = req.body;
+    const fields = [];
+    const params = [];
+    if (name !== undefined) { fields.push("name = ?"); params.push(name || null); }
+    if (profile_id !== undefined) { fields.push("profile_id = ?"); params.push(profile_id || null); }
+    if (curator_id !== undefined) { fields.push("curator_id = ?"); params.push(curator_id || null); }
+    if (status !== undefined) { fields.push("status = ?"); params.push(status || null); }
+    if (avatar_url !== undefined) { fields.push("avatar_url = ?"); params.push(avatar_url || null); }
+    
+    if (fields.length > 0) {
+      params.push(req.params.id);
+      db.prepare(`UPDATE groups SET ${fields.join(", ")} WHERE id = ?`).run(...params);
+    }
+    
     logAction(req, { action: "update", entityType: "group", entityId: Number(req.params.id), entityName: name });
     res.json({ success: true });
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -227,8 +242,28 @@ app.put("/api/groups/:id", (req, res) => {
 app.delete("/api/groups/:id", (req, res) => {
   try {
     const g = db.prepare("SELECT name FROM groups WHERE id = ?").get(req.params.id);
-    db.prepare("DELETE FROM groups WHERE id = ?").run(req.params.id);
-    logAction(req, { action: "delete", entityType: "group", entityId: Number(req.params.id), entityName: g?.name });
+    db.prepare("UPDATE groups SET status = 'archived' WHERE id = ?").run(req.params.id);
+    logAction(req, { action: "archive", entityType: "group", entityId: Number(req.params.id), entityName: g?.name });
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.delete("/api/groups/:id/hard", (req, res) => {
+  try {
+    const id = req.params.id;
+    const g = db.prepare("SELECT name FROM groups WHERE id = ?").get(id);
+    if (!g) return res.status(404).json({ error: "Group not found" });
+
+    db.transaction(() => {
+      db.prepare("UPDATE students SET group_id = NULL WHERE group_id = ?").run(id);
+      db.prepare("DELETE FROM quizzes WHERE schedule_id IN (SELECT id FROM schedule WHERE group_id = ?)").run(id);
+      db.prepare("DELETE FROM attendance WHERE lesson_id IN (SELECT id FROM lessons WHERE schedule_id IN (SELECT id FROM schedule WHERE group_id = ?))").run(id);
+      db.prepare("DELETE FROM schedule WHERE group_id = ?").run(id);
+      db.prepare("DELETE FROM curatorship_logs WHERE group_id = ?").run(id);
+      db.prepare("DELETE FROM groups WHERE id = ?").run(id);
+    })();
+    
+    logAction(req, { action: "delete", entityType: "group", entityId: Number(id), entityName: g.name });
     res.json({ success: true });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -287,9 +322,10 @@ app.get("/api/schedule", (req, res) => {
     let query = `
       SELECT s.id, s.group_id, s.subject_id, s.teacher_id, s.room_id, s.time_slot_id, s.cycle,
              s.custom_label,
-             g.name as group_name,
+             g.name as group_name, g.avatar_url as group_avatar,
              subj.name as subject_name,
              u.name || ' ' || u.surname as teacher_name,
+             u.avatar_url as teacher_avatar,
              r.name as room_name,
              ts.start_time, ts.end_time, ts.label as time_label
       FROM schedule s
@@ -345,7 +381,7 @@ app.post("/api/schedule", (req, res) => {
     }
 
     const created = db.prepare(`
-      SELECT s.*, g.name as group_name, subj.name as subject_name,
+      SELECT s.*, g.name as group_name, g.avatar_url as group_avatar, subj.name as subject_name,
              u.name || ' ' || u.surname as teacher_name, r.name as room_name,
              ts.start_time, ts.end_time, ts.label as time_label
       FROM schedule s
@@ -394,7 +430,7 @@ app.put("/api/schedule/:id", (req, res) => {
     }
 
     const updated = db.prepare(`
-      SELECT s.*, g.name as group_name, subj.name as subject_name,
+      SELECT s.*, g.name as group_name, g.avatar_url as group_avatar, subj.name as subject_name,
              u.name || ' ' || u.surname as teacher_name, r.name as room_name,
              ts.start_time, ts.end_time, ts.label as time_label
       FROM schedule s
@@ -413,11 +449,33 @@ app.put("/api/schedule/:id", (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+app.delete("/api/schedule/clear", (req, res) => {
+  try {
+    const cycle = req.query.cycle;
+    db.transaction(() => {
+      if (cycle) {
+        db.prepare("DELETE FROM attendance WHERE lesson_id IN (SELECT l.id FROM lessons l JOIN schedule s ON l.schedule_id = s.id WHERE s.cycle = ?)").run(cycle);
+        db.prepare("DELETE FROM schedule WHERE cycle = ?").run(cycle);
+        logAction(req, { action: "clear", entityType: "schedule", entityId: 0, entityName: cycle });
+      } else {
+        db.prepare("DELETE FROM attendance WHERE lesson_id IN (SELECT id FROM lessons)").run();
+        db.prepare("DELETE FROM schedule").run();
+        logAction(req, { action: "clear", entityType: "schedule", entityId: 0, entityName: "All" });
+      }
+    })();
+    db.prepare("DELETE FROM time_slots WHERE (label IS NULL OR label = '') AND id NOT IN (SELECT time_slot_id FROM schedule)").run();
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 app.delete("/api/schedule/:id", (req, res) => {
   try {
     // Get the time_slot_id before deleting
     const entry = db.prepare("SELECT time_slot_id FROM schedule WHERE id = ?").get(req.params.id);
-    db.prepare("DELETE FROM schedule WHERE id = ?").run(req.params.id);
+    db.transaction(() => {
+      db.prepare("DELETE FROM attendance WHERE lesson_id IN (SELECT id FROM lessons WHERE schedule_id = ?)").run(req.params.id);
+      db.prepare("DELETE FROM schedule WHERE id = ?").run(req.params.id);
+    })();
     // Clean up orphan custom time_slots (no label = custom) that are no longer referenced
     if (entry) {
       const slot = db.prepare("SELECT id, label FROM time_slots WHERE id = ?").get(entry.time_slot_id);
@@ -431,40 +489,47 @@ app.delete("/api/schedule/:id", (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// Move a lesson to a different teacher / time slot (partial update, no room change)
+// Move a lesson to a different teacher, group or time slot (partial update, no room change)
 app.patch("/api/schedule/:id/move", (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const { teacher_id, time_slot_id, cycle } = req.body;
-    if (!teacher_id || !time_slot_id || !cycle)
-      return res.status(400).json({ error: "Требуются teacher_id, time_slot_id и cycle" });
+    const { time_slot_id, cycle } = req.body;
+    
+    if (!time_slot_id || !cycle)
+      return res.status(400).json({ error: "Требуются time_slot_id и cycle" });
 
     // Get current entry
-    const current = db.prepare("SELECT group_id FROM schedule WHERE id = ?").get(id);
+    const current = db.prepare("SELECT group_id, teacher_id FROM schedule WHERE id = ?").get(id);
     if (!current) return res.status(404).json({ error: "Entry not found" });
 
+    const newTeacherId = req.body.teacher_id || current.teacher_id;
+    const newGroupId = req.body.group_id || current.group_id;
+
     // Resolve student IDs for this entry
-    const resolvedStudentIds = current.group_id
-      ? db.prepare("SELECT id FROM students WHERE group_id = ? AND status = 'active'").all(current.group_id).map(s => s.id)
+    const resolvedStudentIds = newGroupId
+      ? db.prepare("SELECT id FROM students WHERE group_id = ? AND status = 'active'").all(newGroupId).map(s => s.id)
       : db.prepare("SELECT student_id FROM schedule_students WHERE schedule_id = ?").all(id).map(s => s.student_id);
 
     // Check for conflicts using time overlap formula
     const conflicts = checkConflicts({
-      teacher_id, time_slot_id, cycle,
+      teacher_id: newTeacherId, 
+      time_slot_id, 
+      cycle,
       exclude_id: id,
-      group_id: current.group_id,
+      group_id: newGroupId,
       student_ids: resolvedStudentIds,
     });
+    
     if (conflicts.length > 0) {
       const msg = conflicts.map(c => c.message).join("\n");
       return res.status(409).json({ error: msg, conflicts });
     }
 
-    db.prepare("UPDATE schedule SET teacher_id = ?, time_slot_id = ?, cycle = ? WHERE id = ?")
-      .run(teacher_id, time_slot_id, cycle, id);
+    db.prepare("UPDATE schedule SET teacher_id = ?, group_id = ?, time_slot_id = ?, cycle = ? WHERE id = ?")
+      .run(newTeacherId, newGroupId, time_slot_id, cycle, id);
 
     const updated = db.prepare(`
-      SELECT s.*, g.name as group_name, subj.name as subject_name,
+      SELECT s.*, g.name as group_name, g.avatar_url as group_avatar, subj.name as subject_name,
              u.name || ' ' || u.surname as teacher_name, r.name as room_name,
              ts.start_time, ts.end_time, ts.label as time_label
       FROM schedule s
@@ -478,7 +543,7 @@ app.patch("/api/schedule/:id/move", (req, res) => {
 
     // Notify the teacher whose schedule was changed
     createNotification(
-      teacher_id, 'schedule',
+      newTeacherId, 'schedule',
       'Изменение в расписании',
       updated
         ? `Урок ${updated.group_name || updated.custom_label || 'Сводная группа'} — ${updated.subject_name} перенесён на ${updated.start_time}`
@@ -535,7 +600,7 @@ app.delete("/api/schedule/share-token/:token", (req, res) => {
 app.get("/api/schedule/share-tokens", (req, res) => {
   try {
     const rows = db.prepare(`
-      SELECT t.id, t.token, t.group_id, t.created_at, g.name as group_name
+      SELECT t.id, t.token, t.group_id, t.created_at, g.name as group_name, g.avatar_url as group_avatar
       FROM schedule_share_tokens t
       LEFT JOIN groups g ON t.group_id = g.id
       ORDER BY t.created_at DESC
@@ -555,9 +620,10 @@ app.get("/api/public/schedule/:token", (req, res) => {
     let query = `
       SELECT s.id, s.group_id, s.subject_id, s.teacher_id, s.room_id, s.time_slot_id, s.cycle,
              s.custom_label,
-             g.name as group_name,
+             g.name as group_name, g.avatar_url as group_avatar,
              subj.name as subject_name,
              u.name || ' ' || u.surname as teacher_name,
+             u.avatar_url as teacher_avatar,
              r.name as room_name,
              ts.start_time, ts.end_time, ts.label as time_label
       FROM schedule s
@@ -614,7 +680,7 @@ function checkConflicts({ teacher_id, time_slot_id, cycle, exclude_id, group_id,
   // Helper: find all overlapping schedule entries in the same cycle
   const getOverlapping = (extraWhere, params) => {
     const rows = db.prepare(`
-      SELECT s.id, s.group_id, s.custom_label, g.name as group_name, subj.name as subject_name,
+      SELECT s.id, s.group_id, s.custom_label, g.name as group_name, g.avatar_url as group_avatar, subj.name as subject_name,
              u.name || ' ' || u.surname as teacher_name,
              ts.start_time, ts.end_time
       FROM schedule s
@@ -716,7 +782,7 @@ app.get("/api/lessons", (req, res) => {
     let query = `
       SELECT s.id, s.group_id, s.subject_id, s.teacher_id, s.room_id, s.time_slot_id, s.cycle,
              s.custom_label,
-             g.name as group_name, subj.name as subject_name,
+             g.name as group_name, g.avatar_url as group_avatar, subj.name as subject_name,
              u.name || ' ' || u.surname as teacher_name,
              r.name as room_name,
              ts.start_time, ts.end_time
@@ -773,36 +839,53 @@ app.get("/api/lessons", (req, res) => {
 
 app.get("/api/students", (req, res) => {
   try {
-    const { limit, offset = "0", search, status, group_id, sort = "full_name", sort_dir = "asc" } = req.query;
-    const ALLOWED_SORTS = { full_name: "s.full_name", group_name: "g.name", attendance_rate: "attendance_rate", last_ent_score: "last_ent_score" };
-    const sortCol = ALLOWED_SORTS[sort] || "s.full_name";
+    const { limit, offset = "0", search, status, group_id, sort = "full_name", sort_dir = "asc", att_min, att_max, ent_min, ent_max } = req.query;
+    const ALLOWED_SORTS = { full_name: "full_name", group_name: "group_name", attendance_rate: "attendance_rate", last_ent_score: "last_ent_score" };
+    const sortCol = ALLOWED_SORTS[sort] || "full_name";
     const dir = sort_dir === "desc" ? "DESC" : "ASC";
     const conditions = [];
     const params = [];
-    if (search) { conditions.push("s.full_name LIKE ?"); params.push(`%${search}%`); }
-    if (status) { conditions.push("s.status = ?"); params.push(status); }
+    if (search) { 
+      const sLower = search.toLowerCase();
+      conditions.push("(LOWER_CYR(s.full_name) LIKE ?)"); 
+      params.push(`%${sLower}%`); 
+    }
+    // Default to active students if no status filter specified
+    const effectiveStatus = status || 'active';
+    if (effectiveStatus !== 'all') { conditions.push("s.status = ?"); params.push(effectiveStatus); }
     if (group_id) { conditions.push("s.group_id = ?"); params.push(parseInt(group_id)); }
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+
+    let outerConditions = [];
+    if (att_min !== undefined) outerConditions.push(`attendance_rate >= ${parseFloat(att_min)}`);
+    if (att_max !== undefined) outerConditions.push(`attendance_rate <= ${parseFloat(att_max)}`);
+    if (ent_min !== undefined) outerConditions.push(`last_ent_score >= ${parseFloat(ent_min)}`);
+    if (ent_max !== undefined) outerConditions.push(`last_ent_score <= ${parseFloat(ent_max)}`);
+    const outerWhere = outerConditions.length ? "WHERE " + outerConditions.join(" AND ") : "";
+
     const baseSelect = `
-      SELECT s.id, s.full_name, s.phone, s.parent_phone, s.parent_name, s.group_id, s.status, g.name as group_name,
+      SELECT s.id, s.full_name, s.phone, s.parent_phone, s.parent_name, s.group_id, s.status, s.graduation_year, s.avatar_url, g.name as group_name, g.avatar_url as group_avatar,
         (SELECT ROUND(AVG(CASE WHEN a.status='present' THEN 1.0 ELSE 0.0 END)*100,1) FROM attendance a WHERE a.student_id = s.id) as attendance_rate,
         (SELECT SUM(e.score) FROM ent_results e WHERE e.student_id = s.id AND e.month = (SELECT MAX(e2.month) FROM ent_results e2 WHERE e2.student_id = s.id)) as last_ent_score
       FROM students s LEFT JOIN groups g ON s.group_id = g.id
       ${where}
-      ORDER BY ${sortCol} ${dir}`;
+    `;
+
+    const finalQuery = `SELECT * FROM (${baseSelect}) ${outerWhere} ORDER BY ${sortCol} ${dir}`;
+
     if (limit !== undefined) {
-      const { cnt } = db.prepare(`SELECT COUNT(*) as cnt FROM students s LEFT JOIN groups g ON s.group_id = g.id ${where}`).get(...params);
-      const students = db.prepare(`${baseSelect} LIMIT ? OFFSET ?`).all(...params, parseInt(limit), parseInt(offset));
+      const { cnt } = db.prepare(`SELECT COUNT(*) as cnt FROM (${baseSelect}) ${outerWhere}`).get(...params);
+      const students = db.prepare(`${finalQuery} LIMIT ? OFFSET ?`).all(...params, parseInt(limit), parseInt(offset));
       return res.json({ students, total: cnt });
     }
-    res.json(db.prepare(baseSelect).all(...params));
+    res.json(db.prepare(finalQuery).all(...params));
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.get("/api/students/:id", (req, res) => {
   try {
     const student = db.prepare(`
-      SELECT s.id, s.full_name, s.phone, s.parent_phone, s.parent_name, s.group_id, s.status, g.name as group_name
+      SELECT s.id, s.full_name, s.phone, s.parent_phone, s.parent_name, s.group_id, s.status, g.name as group_name, g.avatar_url as group_avatar
       FROM students s LEFT JOIN groups g ON s.group_id = g.id WHERE s.id = ?
     `).get(req.params.id);
     if (!student) return res.status(404).json({ error: "Student not found" });
@@ -844,7 +927,7 @@ app.get("/api/student-360/:id", (req, res) => {
     const student = db.prepare(`
       SELECT s.id, s.full_name, s.phone, s.parent_phone, s.parent_name,
              s.group_id, s.status, s.avatar_url,
-             g.name as group_name,
+             g.name as group_name, g.avatar_url as group_avatar,
              p.name as profile_name,
              g.curator_id,
              u.name || ' ' || u.surname as curator_name,
@@ -857,6 +940,23 @@ app.get("/api/student-360/:id", (req, res) => {
     `).get(sid);
     if (!student) return res.status(404).json({ error: "Student not found" });
 
+    const { start, end } = req.query;
+    
+    let dateFilterAtt = "";
+    let dateFilterLesson = "";
+    let dateFilterMonth = "";
+    let dateFilterQuizzes = "";
+    const params = { sid };
+    
+    if (start && end) {
+      dateFilterAtt = " AND lesson_id IN (SELECT id FROM lessons WHERE date >= @start AND date <= @end) ";
+      dateFilterLesson = " AND l.date >= @start AND l.date <= @end ";
+      dateFilterMonth = " AND month >= substr(@start, 1, 7) AND month <= substr(@end, 1, 7) ";
+      dateFilterQuizzes = " AND date >= @start AND date <= @end ";
+      params.start = start;
+      params.end = end;
+    }
+
     const attStats = db.prepare(`
       SELECT COUNT(*) AS total_lessons,
         SUM(CASE WHEN status='present' THEN 1 ELSE 0 END) AS present_count,
@@ -865,8 +965,8 @@ app.get("/api/student-360/:id", (req, res) => {
         SUM(CASE WHEN homework='done'  THEN 1 ELSE 0 END) AS hw_done_count,
         ROUND(AVG(CASE WHEN status='present' THEN 1.0 ELSE 0.0 END)*100,1) AS attendance_rate,
         ROUND(AVG(CASE WHEN homework='done'  THEN 1.0 ELSE 0.0 END)*100,1) AS homework_rate
-      FROM attendance WHERE student_id = ?
-    `).get(sid);
+      FROM attendance WHERE student_id = @sid ${dateFilterAtt}
+    `).get(params);
 
     const attMonthly = db.prepare(`
       SELECT strftime('%Y-%m', l.date) AS month,
@@ -876,8 +976,8 @@ app.get("/api/student-360/:id", (req, res) => {
         SUM(CASE WHEN a.lateness='late'  THEN 1 ELSE 0 END) AS late,
         ROUND(AVG(CASE WHEN a.status='present' THEN 1.0 ELSE 0.0 END)*100,1) AS rate
       FROM attendance a JOIN lessons l ON a.lesson_id = l.id
-      WHERE a.student_id = ? GROUP BY month ORDER BY month
-    `).all(sid);
+      WHERE a.student_id = @sid ${dateFilterLesson} GROUP BY month ORDER BY month
+    `).all(params);
 
     const attBySubject = db.prepare(`
       SELECT subj.name AS subject,
@@ -890,8 +990,8 @@ app.get("/api/student-360/:id", (req, res) => {
       JOIN lessons l ON a.lesson_id = l.id
       JOIN schedule sc ON l.schedule_id = sc.id
       JOIN subjects subj ON sc.subject_id = subj.id
-      WHERE a.student_id = ? GROUP BY subj.id ORDER BY subj.name
-    `).all(sid);
+      WHERE a.student_id = @sid ${dateFilterLesson} GROUP BY subj.id ORDER BY subj.name
+    `).all(params);
 
     const attRecords = db.prepare(`
       SELECT l.date, subj.name AS subject,
@@ -902,14 +1002,14 @@ app.get("/api/student-360/:id", (req, res) => {
       JOIN schedule sc ON l.schedule_id = sc.id
       LEFT JOIN subjects subj ON sc.subject_id = subj.id
       LEFT JOIN users u ON sc.teacher_id = u.id
-      WHERE a.student_id = ? ORDER BY l.date DESC LIMIT 40
-    `).all(sid);
+      WHERE a.student_id = @sid ${dateFilterLesson} ORDER BY l.date DESC LIMIT 40
+    `).all(params);
 
     const entFlat = db.prepare(`
       SELECT e.month, e.score, subj.name AS subject, subj.type
       FROM ent_results e JOIN subjects subj ON e.subject_id = subj.id
-      WHERE e.student_id = ? ORDER BY e.month, subj.name
-    `).all(sid);
+      WHERE e.student_id = @sid ${dateFilterMonth.replace(/month/g, 'e.month')} ORDER BY e.month, subj.name
+    `).all(params);
 
     const entMap = {};
     for (const row of entFlat) {
@@ -925,8 +1025,8 @@ app.get("/api/student-360/:id", (req, res) => {
         MIN(e.score) AS score_min, MAX(e.score) AS score_max,
         ROUND(AVG(e.score),1) AS score_avg
       FROM ent_results e JOIN subjects subj ON e.subject_id = subj.id
-      WHERE e.student_id = ? GROUP BY subj.id ORDER BY subj.name
-    `).all(sid);
+      WHERE e.student_id = @sid ${dateFilterMonth.replace(/month/g, 'e.month')} GROUP BY subj.id ORDER BY subj.name
+    `).all(params);
 
     const lastEntMonth = entByMonth.length > 0 ? entByMonth[entByMonth.length - 1].month : null;
     let groupBenchmark = [], rankInGroup = null, groupSize = 0;
@@ -1006,7 +1106,7 @@ app.get("/api/student-360/:id", (req, res) => {
       parentName: student.parent_name, status: student.status,
       avatar_url: student.avatar_url,
       group: {
-        id: student.group_id, name: student.group_name,
+        id: student.group_id, name: student.group_name, avatar_url: student.group_avatar,
         profileName: student.profile_name,
         curatorName: student.curator_name, curatorPhone: student.curator_phone,
       },
@@ -1043,10 +1143,106 @@ app.post("/api/students", (req, res) => {
 
 app.delete("/api/students/:id", (req, res) => {
   try {
-    const st = db.prepare("SELECT full_name FROM students WHERE id = ?").get(req.params.id);
-    db.prepare("DELETE FROM students WHERE id = ?").run(req.params.id);
-    logAction(req, { action: "delete", entityType: "student", entityId: Number(req.params.id), entityName: st?.full_name });
+    const id = req.params.id;
+    const st = db.prepare("SELECT full_name FROM students WHERE id = ?").get(id);
+    db.transaction(() => {
+      db.prepare("DELETE FROM attendance WHERE student_id = ?").run(id);
+      db.prepare("DELETE FROM ent_results WHERE student_id = ?").run(id);
+      db.prepare("DELETE FROM parent_feedback WHERE student_id = ?").run(id);
+      db.prepare("DELETE FROM curator_call_tasks WHERE student_id = ?").run(id);
+      db.prepare("DELETE FROM teacher_student_feedback WHERE student_id = ?").run(id);
+      db.prepare("DELETE FROM schedule_students WHERE student_id = ?").run(id);
+      db.prepare("DELETE FROM quiz_results WHERE student_id = ?").run(id);
+      db.prepare("DELETE FROM students WHERE id = ?").run(id);
+    })();
+    logAction(req, { action: "delete", entityType: "student", entityId: Number(id), entityName: st?.full_name });
     res.json({ success: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post("/api/students/bulk-archive", (req, res) => {
+  try {
+    const { graduation_year, studentIds } = req.body;
+    if (!graduation_year) return res.status(400).json({ error: "Graduation year is required" });
+    
+    let updatedCount = 0;
+    if (Array.isArray(studentIds) && studentIds.length > 0) {
+      const placeholders = studentIds.map(() => '?').join(',');
+      const result = db.prepare(`UPDATE students SET status = 'archived', graduation_year = ? WHERE id IN (${placeholders}) AND status = 'active'`).run(graduation_year, ...studentIds);
+      updatedCount = result.changes;
+      logAction(req, { action: "bulk-archive", entityType: "student", entityId: 0, entityName: `${updatedCount} students` });
+    } else {
+      const result = db.prepare("UPDATE students SET status = 'archived', graduation_year = ? WHERE status = 'active'").run(graduation_year);
+      updatedCount = result.changes;
+      logAction(req, { action: "bulk-archive", entityType: "student", entityId: 0, entityName: "All active students" });
+    }
+    
+    res.json({ success: true, updatedCount });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post("/api/students/bulk-import", (req, res) => {
+  try {
+    const { students, preview, overwriteMode } = req.body;
+    if (!Array.isArray(students)) return res.status(400).json({ error: "Invalid data format" });
+    
+    const allStudents = db.prepare(`SELECT id, full_name FROM students`).all();
+    const existingById = new Map(allStudents.map(s => [s.id, s]));
+    const existingByName = new Map(allStudents.map(s => [s.full_name.trim().toLowerCase(), s]));
+
+    let existingCount = 0;
+    for (const st of students) {
+      if (!st.full_name) continue;
+      const sId = Number(st.id);
+      const hasId = !isNaN(sId) && sId > 0;
+      
+      let matchedStudent = null;
+      if (hasId && existingById.has(sId)) {
+        matchedStudent = existingById.get(sId);
+      } else if (existingByName.has(st.full_name.trim().toLowerCase())) {
+        matchedStudent = existingByName.get(st.full_name.trim().toLowerCase());
+      }
+      
+      if (matchedStudent) {
+        st._matchedId = matchedStudent.id;
+        existingCount++;
+      }
+    }
+    
+    if (preview) {
+      return res.json({ success: true, existingCount });
+    }
+
+    const insert = db.prepare("INSERT INTO students (id, full_name, phone, parent_name, parent_phone, group_id, status) VALUES (?, ?, ?, ?, ?, ?, 'active')");
+    const insertNoId = db.prepare("INSERT INTO students (full_name, phone, parent_name, parent_phone, group_id, status) VALUES (?, ?, ?, ?, ?, 'active')");
+    const update = db.prepare("UPDATE students SET full_name = ?, phone = ?, parent_name = ?, parent_phone = ?, group_id = ? WHERE id = ?");
+    
+    let count = 0;
+    let updatedCount = 0;
+    
+    db.transaction(() => {
+      for (const st of students) {
+        if (!st.full_name) continue;
+        
+        if (st._matchedId) {
+          if (overwriteMode) {
+            update.run(st.full_name, st.phone || null, st.parent_name || null, st.parent_phone || null, st.group_id || null, st._matchedId);
+            updatedCount++;
+          }
+        } else {
+          const sId = Number(st.id);
+          const hasId = !isNaN(sId) && sId > 0;
+          if (hasId) {
+            insert.run(sId, st.full_name, st.phone || null, st.parent_name || null, st.parent_phone || null, st.group_id || null);
+          } else {
+            insertNoId.run(st.full_name, st.phone || null, st.parent_name || null, st.parent_phone || null, st.group_id || null);
+          }
+          count++;
+        }
+      }
+    })();
+    logAction(req, { action: "bulk-import", entityType: "student", entityId: 0, entityName: `${count} inserted, ${updatedCount} updated` });
+    res.json({ success: true, importedCount: count, updatedCount });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -1136,19 +1332,21 @@ app.post("/api/attendance", (req, res) => {
     }
 
     const actualLessonId = lesson ? lesson.id : lesson_id;
+    const student = db.prepare("SELECT group_id FROM students WHERE id = ?").get(student_id);
+    const sGroupId = student ? student.group_id : null;
 
     db.prepare(`
-      INSERT INTO attendance (student_id, lesson_id, status, lateness, homework, comment)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO attendance (student_id, lesson_id, group_id, status, lateness, homework, comment)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(student_id, lesson_id) DO UPDATE SET
-        status=excluded.status, lateness=excluded.lateness, homework=excluded.homework, comment=excluded.comment
-    `).run(student_id, actualLessonId, status || "present", lateness || "on_time", homework || "done", comment || null);
+        group_id=excluded.group_id, status=excluded.status, lateness=excluded.lateness, homework=excluded.homework, comment=excluded.comment
+    `).run(student_id, actualLessonId, sGroupId, status || "present", lateness || "on_time", homework || "done", comment || null);
 
     // Notify curator when student is marked absent
     if ((status || "present") === "absent") {
       try {
         const studentInfo = db.prepare(`
-          SELECT s.full_name, g.curator_id, g.name as group_name
+          SELECT s.full_name, g.curator_id, g.name as group_name, g.avatar_url as group_avatar
           FROM students s LEFT JOIN groups g ON s.group_id = g.id WHERE s.id = ?
         `).get(student_id);
         if (studentInfo && studentInfo.curator_id) {
@@ -1204,7 +1402,7 @@ app.get("/api/admin/schedule-fill-status", (req, res) => {
     const scheduleEntries = db.prepare(`
       SELECT s.id, s.teacher_id, s.cycle,
              u.name || ' ' || u.surname as teacher_name,
-             g.name as group_name,
+             g.name as group_name, g.avatar_url as group_avatar,
              subj.name as subject_name,
              ts.label as time_label, ts.start_time
       FROM schedule s
@@ -1277,7 +1475,7 @@ app.get("/api/adhoc-lessons", (req, res) => {
     const lessons = db.prepare(query).all(...params);
     // Attach students
     const stmtStudents = db.prepare(`
-      SELECT als.*, st.full_name, st.group_id, g.name as group_name
+      SELECT als.*, st.full_name, st.group_id, g.name as group_name, g.avatar_url as group_avatar
       FROM adhoc_lesson_students als
       JOIN students st ON als.student_id = st.id
       LEFT JOIN groups g ON st.group_id = g.id
@@ -1387,13 +1585,13 @@ app.get("/api/quizzes", (req, res) => {
         UNIQUE(quiz_id, student_id)
       );
     `);
-    const { schedule_id, date, student_id, group_id, subject_id } = req.query;
+    const { schedule_id, date, start_date, end_date, student_id, group_id, subject_id, status } = req.query;
     if (student_id) {
       const rows = db.prepare(`
         SELECT q.id, q.title, q.date, qr.score,
                u.name || ' ' || u.surname AS teacher_name,
                subj.name AS subject_name,
-               g.name AS group_name
+               g.name as group_name, g.avatar_url as group_avatar
         FROM quiz_results qr
         JOIN quizzes q ON qr.quiz_id = q.id
         LEFT JOIN users u ON q.created_by = u.id
@@ -1409,13 +1607,15 @@ app.get("/api/quizzes", (req, res) => {
     let where = "WHERE 1=1";
     if (schedule_id) { where += " AND q.schedule_id = ?"; params.push(schedule_id); }
     if (date)        { where += " AND q.date = ?";        params.push(date); }
+    if (start_date)  { where += " AND q.date >= ?";       params.push(start_date); }
+    if (end_date)    { where += " AND q.date <= ?";       params.push(end_date); }
     if (group_id)    { where += " AND sc.group_id = ?";   params.push(parseInt(group_id)); }
     if (subject_id)  { where += " AND sc.subject_id = ?"; params.push(parseInt(subject_id)); }
     const quizzes = db.prepare(`
       SELECT q.id, q.title, q.date, q.created_at,
              u.name || ' ' || u.surname AS teacher_name,
              subj.name AS subject_name,
-             g.name AS group_name, sc.group_id
+             g.name as group_name, g.avatar_url as group_avatar, sc.group_id
       FROM quizzes q
       LEFT JOIN users u ON q.created_by = u.id
       LEFT JOIN schedule sc ON q.schedule_id = sc.id
@@ -1426,9 +1626,10 @@ app.get("/api/quizzes", (req, res) => {
     `).all(...params);
     for (const q of quizzes) {
       q.results = db.prepare(`
-        SELECT qr.student_id, qr.score, s.full_name AS student_name
+        SELECT qr.student_id, qr.score, s.full_name AS full_name, g.name AS group_name, g.avatar_url AS group_avatar
         FROM quiz_results qr
         JOIN students s ON qr.student_id = s.id
+        LEFT JOIN groups g ON s.group_id = g.id
         WHERE qr.quiz_id = ?
       `).all(q.id);
     }
@@ -1436,13 +1637,69 @@ app.get("/api/quizzes", (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// ====================== MONTHLY REPORTS ======================
+app.get("/api/monthly-reports", (req, res) => {
+  try {
+    const { student_id, month } = req.query;
+    if (!student_id || !month) return res.status(400).json({ error: "student_id and month required" });
+    const report = db.prepare("SELECT * FROM student_monthly_reports WHERE student_id = ? AND month = ?").get(parseInt(student_id), month);
+    res.json(report || { student_id: parseInt(student_id), month, summary: "" });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/monthly-reports", (req, res) => {
+  try {
+    const { student_id, month, summary } = req.body;
+    if (!student_id || !month) return res.status(400).json({ error: "student_id and month required" });
+    db.prepare(`
+      INSERT INTO student_monthly_reports (student_id, month, summary, updated_at)
+      VALUES (?, ?, ?, datetime('now'))
+      ON CONFLICT(student_id, month) DO UPDATE SET summary = excluded.summary, updated_at = excluded.updated_at
+    `).run(parseInt(student_id), month, summary || "");
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/monthly-reports/group", (req, res) => {
+  try {
+    const { group_id, month } = req.query;
+    if (!group_id || !month) return res.status(400).json({ error: "group_id and month required" });
+    const reports = db.prepare(`
+      SELECT r.* FROM student_monthly_reports r
+      JOIN students s ON r.student_id = s.id
+      WHERE s.group_id = ? AND r.month = ?
+    `).all(parseInt(group_id), month);
+    res.json(reports);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/monthly-reports/batch", (req, res) => {
+  try {
+    const { month, summaries } = req.body;
+    if (!month || !Array.isArray(summaries)) return res.status(400).json({ error: "month and summaries array required" });
+    
+    db.transaction(() => {
+      const stmt = db.prepare(`
+        INSERT INTO student_monthly_reports (student_id, month, summary, updated_at)
+        VALUES (?, ?, ?, datetime('now'))
+        ON CONFLICT(student_id, month) DO UPDATE SET summary = excluded.summary, updated_at = excluded.updated_at
+      `);
+      for (const item of summaries) {
+        stmt.run(parseInt(item.student_id), month, item.summary || "");
+      }
+    })();
+    
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ====================== ENT RESULTS ======================
 app.get("/api/ent-results", (req, res) => {
   try {
-    const { month, group_id } = req.query;
+    const { month, group_id, status } = req.query;
     let query = `
       SELECT e.id, e.student_id, e.subject_id, e.score, e.month,
-             s.full_name as student_name, subj.name as subject_name, s.group_id, g.name as group_name
+             s.full_name as student_name, subj.name as subject_name, s.group_id, g.name as group_name, g.avatar_url as group_avatar
       FROM ent_results e
       JOIN students s ON e.student_id = s.id
       JOIN subjects subj ON e.subject_id = subj.id
@@ -1450,6 +1707,8 @@ app.get("/api/ent-results", (req, res) => {
     `;
     const conditions = [];
     const params = [];
+    const statusFilter = status || 'active';
+    if (statusFilter !== 'all') { conditions.push("s.status = ?"); params.push(statusFilter); }
     if (month) { conditions.push("e.month = ?"); params.push(month); }
     if (group_id) { conditions.push("s.group_id = ?"); params.push(parseInt(group_id)); }
     if (conditions.length) query += " WHERE " + conditions.join(" AND ");
@@ -1463,10 +1722,12 @@ app.post("/api/ent-results", (req, res) => {
     const { student_id, subject_id, score, month } = req.body;
     if (!student_id || !subject_id || score === undefined || !month)
       return res.status(400).json({ error: "All fields required" });
+    const student = db.prepare("SELECT group_id FROM students WHERE id = ?").get(student_id);
+    const sGroupId = student ? student.group_id : null;
     db.prepare(`
-      INSERT INTO ent_results (student_id, subject_id, score, month) VALUES (?, ?, ?, ?)
-      ON CONFLICT(student_id, subject_id, month) DO UPDATE SET score=excluded.score
-    `).run(student_id, subject_id, score, month);
+      INSERT INTO ent_results (student_id, subject_id, group_id, score, month) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(student_id, subject_id, month) DO UPDATE SET group_id=excluded.group_id, score=excluded.score
+    `).run(student_id, subject_id, sGroupId, score, month);
     res.json({ success: true });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -1478,18 +1739,27 @@ app.post("/api/ent-results/batch", (req, res) => {
     if (!Array.isArray(scores) || scores.length === 0)
       return res.status(400).json({ error: "scores array required" });
     const upsert = db.prepare(`
-      INSERT INTO ent_results (student_id, subject_id, score, month)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(student_id, subject_id, month) DO UPDATE SET score = excluded.score
+      INSERT INTO ent_results (student_id, subject_id, group_id, score, month)
+      VALUES (?, ?, (SELECT group_id FROM students WHERE id = ?), ?, ?)
+      ON CONFLICT(student_id, subject_id, month) DO UPDATE SET group_id = excluded.group_id, score = excluded.score
     `);
     const tx = db.transaction(() => {
       for (const s of scores) {
         if (!s.student_id || !s.subject_id || s.score === undefined || !s.month) continue;
-        upsert.run(parseInt(s.student_id), parseInt(s.subject_id), parseInt(s.score), s.month);
+        upsert.run(parseInt(s.student_id), parseInt(s.subject_id), parseInt(s.student_id), parseInt(s.score), s.month);
       }
     });
     tx();
     res.json({ success: true, count: scores.length });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.delete("/api/ent-results", (req, res) => {
+  try {
+    const { student_id, month } = req.query;
+    if (!student_id || !month) return res.status(400).json({ error: "student_id and month required" });
+    db.prepare("DELETE FROM ent_results WHERE student_id = ? AND month = ?").run(parseInt(student_id), month);
+    res.json({ success: true });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -1609,7 +1879,7 @@ app.get("/api/curatorship", (req, res) => {
   try {
     const { curator_id } = req.query;
     let query = `
-      SELECT cl.*, g.name as group_name, u.name || ' ' || u.surname as curator_name
+      SELECT cl.*, g.name as group_name, g.avatar_url as group_avatar, u.name || ' ' || u.surname as curator_name
       FROM curatorship_logs cl
       JOIN groups g ON cl.group_id = g.id
       JOIN users u ON cl.curator_id = u.id
@@ -1882,15 +2152,15 @@ app.post("/api/tasks/process-recurring", (req, res) => {
 // Users: create
 app.post("/api/users", (req, res) => {
   try {
-    const { name, surname, phone, email, password, role } = req.body;
+    const { name, surname, phone, email, password, role, avatar_url } = req.body;
     if (!name || !surname) return res.status(400).json({ error: "name and surname required" });
     const roleMap = { admin: 1, umo_head: 2, teacher: 3 };
     const role_id = roleMap[role] ?? 3;
     const rawPwd = password || surname.toLowerCase() + Date.now();
     const pwd = bcrypt.hashSync(rawPwd, 10);
     const result = db.prepare(
-      "INSERT INTO users (name, surname, phone, email, password, role_id) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run(name, surname, phone || null, email || null, pwd, role_id);
+      "INSERT INTO users (name, surname, phone, email, password, role_id, avatar_url) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).run(name, surname, phone || null, email || null, pwd, role_id, avatar_url || null);
     logAction(req, { action: "create", entityType: "user", entityId: result.lastInsertRowid, entityName: name + " " + surname, details: JSON.stringify({ role, email }) });
     res.json({ id: result.lastInsertRowid, success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1899,7 +2169,7 @@ app.post("/api/users", (req, res) => {
 // Users: update
 app.put("/api/users/:id", (req, res) => {
   try {
-    const { name, surname, phone, email, role, password, current_password } = req.body;
+    const { name, surname, phone, email, role, password, current_password, avatar_url } = req.body;
     const roleMap = { admin: 1, umo_head: 2, teacher: 3 };
     const role_id = role ? roleMap[role] : null;
 
@@ -1916,13 +2186,14 @@ app.put("/api/users/:id", (req, res) => {
 
     db.prepare(`
       UPDATE users SET
-        name    = COALESCE(?, name),
-        surname = COALESCE(?, surname),
-        phone   = COALESCE(?, phone),
-        email   = COALESCE(?, email),
-        role_id = COALESCE(?, role_id)
+        name       = COALESCE(?, name),
+        surname    = COALESCE(?, surname),
+        phone      = COALESCE(?, phone),
+        email      = COALESCE(?, email),
+        role_id    = COALESCE(?, role_id),
+        avatar_url = COALESCE(?, avatar_url)
       WHERE id = ?
-    `).run(name || null, surname || null, phone || null, email || null, role_id, req.params.id);
+    `).run(name || null, surname || null, phone || null, email || null, role_id, avatar_url !== undefined ? avatar_url : null, req.params.id);
     logAction(req, { action: "update", entityType: "user", entityId: Number(req.params.id), entityName: (name || '') + ' ' + (surname || ''), details: JSON.stringify({ role, email }) });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -2018,11 +2289,10 @@ app.get("/api/curatorship/my-groups", (req, res) => {
     const groups = db.prepare(`
       SELECT g.id, g.name, g.profile_id,
              p.name as profile_name,
-             COUNT(s.id) as students_count
+             (SELECT COUNT(*) FROM students s2 WHERE s2.group_id = g.id AND s2.status = 'active') as students_count
       FROM groups g
       LEFT JOIN profiles p ON g.profile_id = p.id
-      LEFT JOIN students s ON s.group_id = g.id
-      WHERE g.curator_id = ?
+      WHERE g.curator_id = ? AND g.status = 'active'
       GROUP BY g.id, g.name, g.profile_id, p.name
       ORDER BY g.name
     `).all(parseInt(curator_id));
@@ -2036,11 +2306,11 @@ app.get("/api/curatorship/my-students", (req, res) => {
     if (!curator_id) return res.status(400).json({ error: "curator_id required" });
     const students = db.prepare(`
       SELECT s.id, s.full_name, s.phone, s.parent_phone, s.parent_name, s.status, s.group_id,
-             g.name as group_name,
+             g.name as group_name, g.avatar_url as group_avatar,
              (SELECT SUM(e.score) FROM ent_results e WHERE e.student_id = s.id AND e.month = (SELECT MAX(e2.month) FROM ent_results e2 WHERE e2.student_id = s.id)) as last_ent_score
       FROM students s
       JOIN groups g ON s.group_id = g.id
-      WHERE g.curator_id = ?
+      WHERE g.curator_id = ? AND s.status = 'active' AND g.status = 'active'
       ORDER BY g.name, s.full_name
     `).all(parseInt(curator_id));
     res.json(students);
@@ -2255,7 +2525,7 @@ app.get("/api/admin/attendance-reconciliation", (req, res) => {
     let students;
     if (group_id) {
       students = db.prepare(`
-        SELECT s.id, s.full_name, s.status, g.name AS group_name,
+        SELECT s.id, s.full_name, s.status, g.name as group_name, g.avatar_url as group_avatar,
                p.name AS profile_name,
                u.name || ' ' || u.surname AS curator_name
         FROM students s
@@ -2266,7 +2536,7 @@ app.get("/api/admin/attendance-reconciliation", (req, res) => {
       `).all(parseInt(group_id));
     } else {
       students = db.prepare(`
-        SELECT s.id, s.full_name, s.status, g.name AS group_name,
+        SELECT s.id, s.full_name, s.status, g.name as group_name, g.avatar_url as group_avatar,
                p.name AS profile_name,
                u.name || ' ' || u.surname AS curator_name
         FROM students s
@@ -2341,7 +2611,7 @@ app.get("/api/parent-feedback", (req, res) => {
     let query = `
       SELECT pf.*, s.full_name as student_name, s.parent_phone, s.parent_name,
              u.name || ' ' || u.surname as curator_name,
-             g.name as group_name
+             g.name as group_name, g.avatar_url as group_avatar
       FROM parent_feedback pf
       JOIN students s ON pf.student_id = s.id
       JOIN users u ON pf.curator_id = u.id
@@ -2425,11 +2695,11 @@ app.get("/api/curatorship/call-tasks", (req, res) => {
 
     const tasks = db.prepare(`
       SELECT ct.id, ct.student_id, ct.status, ct.call_result, ct.notes, ct.completed_at,
-             s.full_name, s.parent_phone, s.parent_name, g.name as group_name
+             s.full_name, s.parent_phone, s.parent_name, g.name as group_name, g.avatar_url as group_avatar
       FROM curator_call_tasks ct
       JOIN students s ON ct.student_id = s.id
-      LEFT JOIN groups g ON s.group_id = g.id
-      WHERE ct.curator_id = ? AND ct.month = ?
+      JOIN groups g ON s.group_id = g.id
+      WHERE ct.curator_id = ? AND ct.month = ? AND s.status = 'active' AND g.status = 'active'
       ORDER BY ct.status ASC, s.full_name ASC
     `).all(parseInt(curator_id), m);
 
@@ -2473,13 +2743,15 @@ app.get("/api/curatorship/call-tasks/summary", (req, res) => {
              SUM(CASE WHEN ct.status = 'completed' THEN 1 ELSE 0 END) as completed_tasks
       FROM curator_call_tasks ct
       JOIN users u ON ct.curator_id = u.id
+      JOIN students s ON ct.student_id = s.id
+      JOIN groups g ON s.group_id = g.id
       LEFT JOIN (
         SELECT g.curator_id, GROUP_CONCAT(DISTINCT g.name) as group_names
         FROM groups g
         WHERE g.curator_id IS NOT NULL
         GROUP BY g.curator_id
       ) g_agg ON g_agg.curator_id = u.id
-      WHERE ct.month = ?
+      WHERE ct.month = ? AND s.status = 'active' AND g.status = 'active'
       GROUP BY u.id, u.name, u.surname
       ORDER BY u.name, u.surname
     `).all(month);
@@ -2497,15 +2769,15 @@ app.post("/api/teacher-feedback/generate", (req, res) => {
     if (!teacher_id) return res.status(400).json({ error: "teacher_id required" });
 
     const month = new Date().toISOString().slice(0, 7);
-    // Find all groups & subjects this teacher teaches
+    // Find all groups this teacher teaches
     const scheduleEntries = db.prepare(`
-      SELECT DISTINCT s.group_id, s.subject_id FROM schedule s WHERE s.teacher_id = ?
+      SELECT DISTINCT group_id FROM schedule WHERE teacher_id = ?
     `).all(parseInt(teacher_id));
 
     if (!scheduleEntries.length) return res.json({ generated: 0, total: 0, month });
 
     const insert = db.prepare(
-      "INSERT OR IGNORE INTO teacher_student_feedback (teacher_id, student_id, subject_id, month) VALUES (?, ?, ?, ?)"
+      "INSERT OR IGNORE INTO teacher_student_feedback (teacher_id, student_id, month) VALUES (?, ?, ?)"
     );
     let generated = 0;
     let total = 0;
@@ -2516,7 +2788,7 @@ app.post("/api/teacher-feedback/generate", (req, res) => {
         ).all(entry.group_id);
         for (const st of students) {
           total++;
-          const result = insert.run(parseInt(teacher_id), st.id, entry.subject_id, month);
+          const result = insert.run(parseInt(teacher_id), st.id, month);
           if (result.changes > 0) generated++;
         }
       }
@@ -2536,13 +2808,13 @@ app.get("/api/teacher-feedback", (req, res) => {
 
     const tasks = db.prepare(`
       SELECT tf.id, tf.student_id, tf.subject_id, tf.comment, tf.created_at,
-             s.full_name, s.parent_phone, s.parent_name, g.name as group_name,
+             s.full_name, s.parent_phone, s.parent_name, g.name as group_name, g.avatar_url as group_avatar,
              subj.name as subject_name
       FROM teacher_student_feedback tf
       JOIN students s ON tf.student_id = s.id
-      LEFT JOIN groups g ON s.group_id = g.id
+      JOIN groups g ON s.group_id = g.id
       LEFT JOIN subjects subj ON tf.subject_id = subj.id
-      WHERE tf.teacher_id = ? AND tf.month = ?
+      WHERE tf.teacher_id = ? AND tf.month = ? AND s.status = 'active' AND g.status = 'active'
       ORDER BY g.name, s.full_name, subj.name
     `).all(parseInt(teacher_id), m);
 
@@ -2598,7 +2870,9 @@ app.get("/api/teacher-feedback/summary", (req, res) => {
              SUM(CASE WHEN tf.comment IS NOT NULL AND tf.comment != '' THEN 1 ELSE 0 END) as completed_tasks
       FROM teacher_student_feedback tf
       JOIN users u ON tf.teacher_id = u.id
-      WHERE tf.month = ?
+      JOIN students s ON tf.student_id = s.id
+      JOIN groups g ON s.group_id = g.id
+      WHERE tf.month = ? AND s.status = 'active' AND g.status = 'active'
       GROUP BY u.id, u.name, u.surname
       ORDER BY u.name, u.surname
     `).all(month);
@@ -2744,8 +3018,16 @@ const avatarUpload = multer({
   },
 });
 
+// Wrapper for multer to return JSON errors
+const handleAvatarUpload = (req, res, next) => {
+  avatarUpload.single("avatar")(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    next();
+  });
+};
+
 // User avatar upload (existing)
-app.post("/api/users/:id/avatar", avatarUpload.single("avatar"), async (req, res) => {
+app.post("/api/users/:id/avatar", handleAvatarUpload, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No image file provided" });
     const userId = req.params.id;
@@ -2774,7 +3056,7 @@ app.post("/api/users/:id/avatar", avatarUpload.single("avatar"), async (req, res
 });
 
 // Student avatar upload
-app.post("/api/students/:id/avatar", avatarUpload.single("avatar"), async (req, res) => {
+app.post("/api/students/:id/avatar", handleAvatarUpload, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No image file provided" });
     const studentId = req.params.id;
@@ -2801,6 +3083,7 @@ app.post("/api/students/:id/avatar", avatarUpload.single("avatar"), async (req, 
     res.json({ avatar_url: avatarUrl });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
 
 // Student avatar delete
 app.delete("/api/students/:id/avatar", async (req, res) => {
@@ -3443,7 +3726,11 @@ app.get("/api/audit-log", (req, res) => {
 
     if (entity_type) { conditions.push("entity_type = ?"); params.push(entity_type); }
     if (action) { conditions.push("action = ?"); params.push(action); }
-    if (search) { conditions.push("(user_name LIKE ? OR entity_name LIKE ?)"); params.push(`%${search}%`, `%${search}%`); }
+    if (search) { 
+      const sLower = search.toLowerCase();
+      conditions.push("(LOWER_CYR(user_name) LIKE ? OR LOWER_CYR(entity_name) LIKE ?)"); 
+      params.push(`%${sLower}%`, `%${sLower}%`); 
+    }
     if (from) { conditions.push("created_at >= ?"); params.push(from); }
     if (to) { conditions.push("created_at <= ?"); params.push(to); }
 
@@ -3492,15 +3779,14 @@ app.get("/api/dashboard/attendance-stats", (req, res) => {
     const { months = 6 } = req.query;
     // Monthly attendance by group
     const stats = db.prepare(`
-      SELECT g.name as group_name, g.id as group_id,
+      SELECT g.name as group_name, g.avatar_url as group_avatar, g.id as group_id,
              strftime('%Y-%m', l.date) as month,
              COUNT(CASE WHEN a.status = 'present' THEN 1 END) as present_count,
              COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent_count,
              COUNT(CASE WHEN a.status = 'late' THEN 1 END) as late_count,
              COUNT(a.id) as total_records
       FROM groups g
-      LEFT JOIN students s ON s.group_id = g.id
-      LEFT JOIN attendance a ON a.student_id = s.id
+      LEFT JOIN attendance a ON a.group_id = g.id
       LEFT JOIN lessons l ON a.lesson_id = l.id
       WHERE l.date >= date('now', '-' || ? || ' months')
       GROUP BY g.id, strftime('%Y-%m', l.date)
@@ -3521,7 +3807,7 @@ app.get("/api/dashboard/attendance-stats", (req, res) => {
 
     // Top absent students
     const topAbsent = db.prepare(`
-      SELECT s.full_name, g.name as group_name,
+      SELECT s.full_name, g.name as group_name, g.avatar_url as group_avatar,
              COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent_count
       FROM students s
       LEFT JOIN groups g ON s.group_id = g.id
@@ -3648,7 +3934,7 @@ app.get("/api/analytics/teacher/:id", (req, res) => {
 
     // 5. Attendance per group
     const byGroup = db.prepare(`
-      SELECT g.name as group_name, g.id as group_id,
+      SELECT g.name as group_name, g.avatar_url as group_avatar, g.id as group_id,
              COUNT(CASE WHEN a.status = 'present' THEN 1 END) as present,
              COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
              COUNT(a.id) as total
@@ -3670,7 +3956,7 @@ app.get("/api/analytics/teacher/:id", (req, res) => {
       FROM ent_results e
       JOIN students s ON e.student_id = s.id
       JOIN subjects subj ON e.subject_id = subj.id
-      WHERE s.group_id IN (
+      WHERE e.group_id IN (
         SELECT DISTINCT sch.group_id FROM schedule sch
         WHERE sch.teacher_id = ? AND sch.group_id IS NOT NULL
       )
@@ -3710,19 +3996,19 @@ app.get("/api/reports/attendance", (req, res) => {
 
     const conditions = ["strftime('%Y-%m', l.date) = ?"];
     const params = [month];
-    if (group_id) { conditions.push("s.group_id = ?"); params.push(parseInt(group_id)); }
+    if (group_id) { conditions.push("a.group_id = ?"); params.push(parseInt(group_id)); }
     if (teacher_id) { conditions.push("sch.teacher_id = ?"); params.push(parseInt(teacher_id)); }
 
     const rows = db.prepare(`
       SELECT s.full_name as student_name, s.id as student_id,
-             g.name as group_name, subj.name as subject_name,
+             g.name as group_name, g.avatar_url as group_avatar, subj.name as subject_name,
              l.date, a.status, a.lateness, a.homework, a.comment,
              u.name || ' ' || u.surname as teacher_name
       FROM attendance a
       JOIN lessons l ON a.lesson_id = l.id
       JOIN schedule sch ON l.schedule_id = sch.id
       JOIN students s ON a.student_id = s.id
-      LEFT JOIN groups g ON s.group_id = g.id
+      LEFT JOIN groups g ON a.group_id = g.id
       LEFT JOIN subjects subj ON sch.subject_id = subj.id
       LEFT JOIN users u ON sch.teacher_id = u.id
       WHERE ${conditions.join(" AND ")}
@@ -3731,7 +4017,7 @@ app.get("/api/reports/attendance", (req, res) => {
 
     // Summary stats
     const summary = db.prepare(`
-      SELECT g.name as group_name,
+      SELECT g.name as group_name, g.avatar_url as group_avatar,
              COUNT(CASE WHEN a.status = 'present' THEN 1 END) as present,
              COUNT(CASE WHEN a.status = 'absent' THEN 1 END) as absent,
              COUNT(CASE WHEN a.lateness = 'late' THEN 1 END) as late,
@@ -3740,7 +4026,7 @@ app.get("/api/reports/attendance", (req, res) => {
       JOIN lessons l ON a.lesson_id = l.id
       JOIN schedule sch ON l.schedule_id = sch.id
       JOIN students s ON a.student_id = s.id
-      LEFT JOIN groups g ON s.group_id = g.id
+      LEFT JOIN groups g ON a.group_id = g.id
       WHERE ${conditions.join(" AND ")}
       GROUP BY g.id
       ORDER BY g.name
@@ -3757,7 +4043,7 @@ app.get("/api/reports/ent", (req, res) => {
 
     const conditions = [];
     const params = [];
-    if (group_id) { conditions.push("s.group_id = ?"); params.push(parseInt(group_id)); }
+    if (group_id) { conditions.push("e.group_id = ?"); params.push(parseInt(group_id)); }
     if (from_month) { conditions.push("e.month >= ?"); params.push(from_month); }
     if (to_month) { conditions.push("e.month <= ?"); params.push(to_month); }
 
@@ -3765,20 +4051,20 @@ app.get("/api/reports/ent", (req, res) => {
 
     const rows = db.prepare(`
       SELECT s.full_name as student_name, s.id as student_id,
-             g.name as group_name,
+             g.name as group_name, g.avatar_url as group_avatar,
              subj.name as subject_name,
              e.score, e.month
       FROM ent_results e
       JOIN students s ON e.student_id = s.id
       JOIN subjects subj ON e.subject_id = subj.id
-      LEFT JOIN groups g ON s.group_id = g.id
+      LEFT JOIN groups g ON e.group_id = g.id
       ${where}
       ORDER BY g.name, s.full_name, subj.name, e.month
     `).all(...params);
 
     // Group averages by month
     const groupAvg = db.prepare(`
-      SELECT g.name as group_name,
+      SELECT g.name as group_name, g.avatar_url as group_avatar,
              e.month,
              ROUND(AVG(e.score), 1) as avg_score,
              MIN(e.score) as min_score,
@@ -3786,7 +4072,7 @@ app.get("/api/reports/ent", (req, res) => {
              COUNT(DISTINCT e.student_id) as students_count
       FROM ent_results e
       JOIN students s ON e.student_id = s.id
-      LEFT JOIN groups g ON s.group_id = g.id
+      LEFT JOIN groups g ON e.group_id = g.id
       ${where}
       GROUP BY g.id, e.month
       ORDER BY g.name, e.month
@@ -3819,7 +4105,7 @@ app.get("/api/reports/group-performance", (req, res) => {
              COUNT(a.id) as total
       FROM attendance a
       JOIN lessons l ON a.lesson_id = l.id
-      WHERE a.student_id IN (SELECT id FROM students WHERE group_id = ?)
+      WHERE a.group_id = ?
         AND l.date >= date('now', '-' || ? || ' months')
       GROUP BY a.student_id
     `).all(parseInt(group_id), m);
@@ -3829,7 +4115,7 @@ app.get("/api/reports/group-performance", (req, res) => {
       SELECT e.student_id, subj.name as subject_name, e.score, e.month
       FROM ent_results e
       JOIN subjects subj ON e.subject_id = subj.id
-      WHERE e.student_id IN (SELECT id FROM students WHERE group_id = ?)
+      WHERE e.group_id = ?
       ORDER BY e.student_id, subj.name, e.month DESC
     `).all(parseInt(group_id));
 
@@ -3948,7 +4234,7 @@ app.patch("/api/students/:id/admission", (req, res) => {
 app.get("/api/admission-tracker", (req, res) => {
   try {
     const { group_id } = req.query;
-    let q = `SELECT s.id, s.full_name, s.group_id, g.name as group_name,
+    let q = `SELECT s.id, s.full_name, s.group_id, g.name as group_name, g.avatar_url as group_avatar,
       s.target_university_id, s.target_specialty_id,
       (SELECT SUM(e.score) FROM ent_results e WHERE e.student_id = s.id AND e.month = '1000-01') as unt_january_score,
       (SELECT SUM(e.score) FROM ent_results e WHERE e.student_id = s.id AND e.month = '1000-03') as unt_march_score,

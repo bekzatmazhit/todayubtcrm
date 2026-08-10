@@ -17,6 +17,7 @@ export async function deleteStudentAvatar(studentId: string | number) {
 // - при необходимости можно переопределить через VITE_API_URL
 const rawApiBase = (import.meta as any).env?.VITE_API_URL;
 const API_BASE = rawApiBase ? rawApiBase.replace(/\/$/, "") : "/api";
+export const BACKEND_ORIGIN = rawApiBase && rawApiBase.startsWith("/") ? "" : rawApiBase ?? "http://localhost:3001";
 
 // Для всех запросов по умолчанию не передаём credentials
 const defaultOptions: RequestInit = {};
@@ -1499,5 +1500,111 @@ export async function fetchEntReport(groupId?: number, fromMonth?: string, toMon
 export async function fetchGroupPerformance(groupId: number, months = 3) {
   const res = await fetch(`${API_BASE}/reports/group-performance?group_id=${groupId}&months=${months}`);
   if (!res.ok) throw new Error("Failed to fetch group performance");
+  return res.json();
+}
+
+
+export async function fetchMonthlyReport(student_id: number, month: string) {
+  const params = new URLSearchParams({ student_id: student_id.toString(), month });
+  const res = await fetch(`${API_BASE}/monthly-reports?${params.toString()}`);
+  if (!res.ok) throw new Error("Failed to fetch monthly report");
+  return res.json();
+}
+
+export async function saveMonthlyReport(student_id: number, month: string, summary: string) {
+  const res = await fetch(`${API_BASE}/monthly-reports`, {
+    method: 'POST',
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ student_id, month, summary }),
+  });
+  if (!res.ok) throw new Error("Failed to save monthly report");
+  return res.json();
+}
+
+export async function deleteEntResults(student_id: number, month: string) {
+  const res = await fetch(`${API_BASE}/ent-results?student_id=${student_id}&month=${month}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error("Failed to delete ENT results");
+  return res.json();
+}
+
+export async function fetchGroupMonthlyReports(group_id: number, month: string) {
+  const res = await fetch(`${API_BASE}/monthly-reports/group?group_id=${group_id}&month=${month}`);
+  if (!res.ok) throw new Error("Failed to fetch group reports");
+  return res.json();
+}
+
+export async function saveMonthlyReportsBatch(month: string, summaries: { student_id: number, summary: string }[]) {
+  const res = await fetch(`${API_BASE}/monthly-reports/batch`, {
+    method: 'POST',
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ month, summaries }),
+  });
+  if (!res.ok) throw new Error("Failed to save reports batch");
+  return res.json();
+}
+
+export async function clearSchedule(groupId: number) {
+  const res = await fetch(`${API_BASE}/schedule?group_id=${groupId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to clear schedule');
+  return res.json();
+}
+
+export async function bulkImportStudents(students: any[], overwriteMode: string = 'skip') {
+  const res = await fetch(`${API_BASE}/students/bulk-import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ students, overwriteMode }),
+  });
+  if (!res.ok) throw new Error('Failed to bulk import students');
+  return res.json();
+}
+
+export async function bulkArchiveStudents(graduation_year: string, studentIds?: number[]) {
+  const res = await fetch(`${API_BASE}/students/bulk-archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ graduation_year, studentIds }),
+  });
+  if (!res.ok) throw new Error('Failed to bulk archive students');
+  return res.json();
+}
+
+export async function fetchAllGroups() {
+  const res = await fetch(`${API_BASE}/groups`, defaultOptions);
+  if (!res.ok) throw new Error('Failed to fetch all groups');
+  return res.json();
+}
+
+export async function hardDeleteGroup(id: number) {
+  const res = await fetch(`${API_BASE}/groups/${id}/hard`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to hard delete group');
+  return res.json();
+}
+
+export async function uploadGroupAvatar(groupId: number, file: File) {
+  const fd = new FormData();
+  fd.append("avatar", file);
+  const res = await fetch(`${API_BASE}/groups/${groupId}/avatar`, { method: "POST", body: fd });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteGroupAvatar(groupId: number) {
+  const res = await fetch(`${API_BASE}/groups/${groupId}/avatar`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function uploadUserAvatar(userId: number, file: File) {
+  const fd = new FormData();
+  fd.append("avatar", file);
+  const res = await fetch(`${API_BASE}/users/${userId}/avatar`, { method: "POST", body: fd });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteUserAvatar(userId: number) {
+  const res = await fetch(`${API_BASE}/users/${userId}/avatar`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

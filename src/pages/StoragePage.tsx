@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect, useRef, useCallback } from "react";
 import { Card } from "@/components/ui/card";
+import { BACKEND_ORIGIN } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -350,7 +351,7 @@ export default function StoragePage() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <a
-                            href={isLink ? item.url_or_path : `http://localhost:3001${item.url_or_path}`}
+                            href={isLink ? item.url_or_path : `${BACKEND_ORIGIN}${item.url_or_path}`}
                             target="_blank" rel="noopener noreferrer"
                             className="font-medium text-sm hover:text-primary truncate"
                           >
@@ -377,7 +378,7 @@ export default function StoragePage() {
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                         {!isLink && (
                           <a
-                            href={`http://localhost:3001${item.url_or_path}`}
+                            href={`${BACKEND_ORIGIN}${item.url_or_path}`}
                             download
                             className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
                             onClick={e => e.stopPropagation()}

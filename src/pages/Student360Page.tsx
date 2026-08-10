@@ -1,13 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 import { addExcelWatermarkSheet } from "@/lib/watermark";
+import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import {
   ChevronRight, Phone, MessageSquare, Download, AlertTriangle,
   TrendingUp, TrendingDown, Calendar, BookOpen, Zap, Users,
   Award, Clock, Loader2, ShieldAlert, CheckCircle2, XCircle,
-  BookMarked, BookX, Activity, Star, Minus, ArrowLeft, ClipboardList,
+  BookMarked, BookX, Activity, Star, Minus, ArrowLeft, ClipboardList, Sparkles, FileText
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,13 +23,16 @@ import {
   ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import GradesTab360 from "./student-profile/GradesTab360";
+import { ParentReportModal } from "@/components/ParentReportModal";
 
 /* ═══════════════════════════════════════════════════════════════════════════
    DATA FETCH
    ═══════════════════════════════════════════════════════════════════════════ */
-const fetchStudent360 = async (id: string) => {
+const fetchStudent360 = async (id: string, start?: string, end?: string) => {
   const token = localStorage.getItem("token");
-  const res = await fetch(`/api/student-360/${id}`, {
+  let url = `/api/student-360/${id}`;
+  if (start && end) url += `?start=${start}&end=${end}`;
+  const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error("Failed");
@@ -846,6 +850,8 @@ function CommunicationTab({ s }: { s: any }) {
   );
 }
 
+
+
 /* ═══════════════════════════════════════════════════════════════════════════
    MAIN PAGE
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -856,10 +862,13 @@ export default function Student360Page() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<TabKey>("overview");
   const [avatarError, setAvatarError] = useState(false);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [reportModalOpen, setReportModalOpen] = useState(false);
 
   const { data: s, isLoading, error } = useQuery({
-    queryKey: ["student-360", id],
-    queryFn: () => fetchStudent360(id!),
+    queryKey: ["student-360", id, startDate, endDate],
+    queryFn: () => fetchStudent360(id!, startDate || undefined, endDate || undefined),
     enabled: !!id,
   });
 
@@ -936,7 +945,7 @@ export default function Student360Page() {
     XLSX.writeFile(wb, `${s.full_name} — 360.xlsx`);
   }
 
-  const tabs: { key: TabKey; label: string }[] = [
+  const tabs: { key: TabKey; label: string; icon?: React.ReactNode }[] = [
     { key: "overview",      label: "Обзор" },
     { key: "attendance",    label: "Посещаемость" },
     { key: "ent",           label: "ЕНТ" },
@@ -947,98 +956,162 @@ export default function Student360Page() {
   return (
     <div className="min-h-screen bg-background">
 
-      {/* ── BREADCRUMB BAR ─────────────────────────────────────────────── */}
-      <div className="sticky top-0 z-30 bg-card/80 backdrop-blur-md border-b px-4 md:px-6 h-12 flex items-center justify-between gap-4">
-        <nav className="flex items-center gap-1.5 text-sm text-muted-foreground min-w-0">
-          <button onClick={() => navigate("/students")} className="hover:text-foreground transition-colors flex items-center gap-1 shrink-0">
-            <Users className="h-3.5 w-3.5" /> Ученики
-          </button>
-          <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-40" />
-          <span className="text-foreground font-semibold truncate">{s.full_name}</span>
-          {s.group?.name && (
-            <>
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-30" />
-              <span className="text-xs opacity-60 truncate hidden sm:inline">{s.group.name}</span>
-            </>
-          )}
-        </nav>
-        <div className="flex items-center gap-2 shrink-0">
-          <Button
-            variant="outline" size="sm" className="gap-1.5 text-xs h-8"
-            onClick={() => s.parentPhone && window.open(`https://wa.me/${s.parentPhone.replace(/\D/g, "")}`, "_blank")}
-          >
-            <MessageSquare className="h-3.5 w-3.5 text-emerald-500" /> WhatsApp
-          </Button>
-          <Button variant="outline" size="sm" className="gap-1.5 text-xs h-8" onClick={exportToExcel}>
-            <Download className="h-3.5 w-3.5" /> Экспорт
-          </Button>
+      {/* ── STICKY HEADER (Breadcrumb + Tabs + Filters) ───────────────── */}
+      <div className="sticky top-0 z-30 bg-background/95 backdrop-blur-md border-b">
+        {/* Breadcrumb Row */}
+        <div className="px-4 md:px-6 h-12 flex items-center justify-between gap-4 border-b border-border/40">
+          <nav className="flex items-center gap-1.5 text-sm text-muted-foreground min-w-0">
+            <button onClick={() => navigate("/students")} className="hover:text-foreground transition-colors flex items-center gap-1 shrink-0">
+              <Users className="h-3.5 w-3.5" /> Ученики
+            </button>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-40" />
+            <span className="text-foreground font-semibold truncate">{s.full_name}</span>
+            {s.group?.name && (
+              <>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-30" />
+                <span className="text-xs opacity-60 truncate hidden sm:inline">{s.group.name}</span>
+              </>
+            )}
+          </nav>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              variant="default" size="sm" className="gap-1.5 text-xs h-8 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all hover:shadow hidden sm:flex"
+              onClick={() => setReportModalOpen(true)}
+            >
+              <Sparkles className="h-3.5 w-3.5" /> Отчет
+            </Button>
+            <Button
+              variant="outline" size="sm" className="gap-1.5 text-xs h-8"
+              onClick={() => s.parentPhone && window.open(`https://wa.me/${s.parentPhone.replace(/\D/g, "")}`, "_blank")}
+            >
+              <MessageSquare className="h-3.5 w-3.5 text-emerald-500" /> WhatsApp
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1.5 text-xs h-8" onClick={exportToExcel}>
+              <Download className="h-3.5 w-3.5" /> Экспорт
+            </Button>
+          </div>
+        </div>
+
+        {/* Tab & Filter Row */}
+        <div className="max-w-6xl mx-auto px-4 md:px-6 flex items-center justify-between gap-4 py-1 overflow-x-auto scrollbar-none">
+          <div className="flex items-center gap-2 shrink-0">
+            {tabs.map(t => (
+              <TabBtn key={t.key} active={tab === t.key} onClick={() => setTab(t.key)}>
+                <div className="flex items-center">
+                  {t.icon}
+                  {t.label}
+                </div>
+              </TabBtn>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 border rounded-md px-2 shadow-sm bg-background">
+              <Calendar className="h-4 w-4 text-muted-foreground shrink-0" />
+              <input 
+                type="date" 
+                className="h-8 bg-transparent border-none outline-none text-sm w-[115px] cursor-pointer" 
+                value={startDate} 
+                onChange={e => setStartDate(e.target.value)} 
+              />
+              <span className="text-muted-foreground/40">–</span>
+              <input 
+                type="date" 
+                className="h-8 bg-transparent border-none outline-none text-sm w-[115px] cursor-pointer" 
+                value={endDate} 
+                onChange={e => setEndDate(e.target.value)} 
+              />
+              {(startDate || endDate) && (
+                <button 
+                  className="h-6 w-6 flex items-center justify-center rounded-full hover:bg-muted text-muted-foreground shrink-0 ml-1"
+                  onClick={() => { setStartDate(""); setEndDate(""); }}
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
       {/* ── HERO SECTION ───────────────────────────────────────────────── */}
-      <div className="px-4 md:px-6 pt-6 pb-0">
-        <div className="max-w-6xl mx-auto">
-          {/* Identity row */}
-          <div className="flex gap-4 sm:gap-5 items-start mb-6">
-            {/* Avatar */}
-            <div className="relative shrink-0">
-              {s.avatar_url && !avatarError ? (
-                <img
-                  src={s.avatar_url}
-                  alt=""
-                  onError={() => setAvatarError(true)}
-                  className="w-[72px] h-[72px] rounded-2xl object-cover ring-2 ring-border shadow-md"
-                />
-              ) : (
-                <div className="w-[72px] h-[72px] rounded-2xl bg-muted flex items-center justify-center text-xl font-bold text-muted-foreground ring-1 ring-border">
-                  {initials}
+      <div className="bg-background border-b">
+        <div className="px-4 md:px-6 pt-6 pb-6">
+          <div className="max-w-6xl mx-auto">
+            {/* Identity row */}
+            <div className="flex flex-col sm:flex-row gap-5 sm:gap-6 items-start sm:items-center mb-6">
+              {/* Avatar */}
+              <div className="relative shrink-0">
+                {s.avatar_url && !avatarError ? (
+                  <img
+                    src={s.avatar_url}
+                    alt=""
+                    onError={() => setAvatarError(true)}
+                    className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl object-cover ring-1 ring-border shadow-sm"
+                  />
+                ) : (
+                  <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl bg-muted flex items-center justify-center text-2xl font-bold text-muted-foreground ring-1 ring-border shadow-sm">
+                    {initials}
+                  </div>
+                )}
+                <span className={cn(
+                  "absolute -bottom-1 -right-1 w-5 h-5 rounded-full border-[3px] border-background shadow-sm",
+                  s.status === "active" ? "bg-emerald-500" : "bg-amber-500"
+                )} title={s.status === "active" ? "Активен" : "Архив"} />
+              </div>
+
+              {/* Name & badges */}
+              <div className="flex-1 min-w-0 pt-1">
+                <div className="flex flex-wrap items-center gap-3 mb-2">
+                  <h1 className="text-2xl sm:text-3xl font-heading font-extrabold text-foreground tracking-tight truncate">
+                    {s.full_name}
+                  </h1>
+                  <Badge className={cn("text-xs font-semibold px-2 py-0.5 shrink-0", rCfg.badge)}>
+                    {risk === "high" && <AlertTriangle className="h-3.5 w-3.5 mr-1" />}
+                    {risk === "mid" && <Zap className="h-3.5 w-3.5 mr-1" />}
+                    {rCfg.label}
+                  </Badge>
+                  {s.group?.name && (
+                    <Badge variant="secondary" className="text-xs sm:text-sm font-medium shrink-0 flex items-center gap-1.5 px-2.5 py-1">
+                      <GroupPersonAvatar groupName={s.group.name} avatarUrl={s.group.avatar_url} size={18} showTooltip={false} />
+                      {s.group.name}
+                    </Badge>
+                  )}
+                  {s.group?.profileName && <Badge variant="outline" className="text-xs sm:text-sm font-medium shrink-0 px-2.5 py-1">{s.group.profileName}</Badge>}
                 </div>
-              )}
-              <span className={cn(
-                "absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full border-[2.5px] border-background shadow-sm",
-                s.status === "active" ? "bg-emerald-500" : "bg-amber-500"
-              )} />
-            </div>
-
-            {/* Name & badges */}
-            <div className="flex-1 min-w-0 pt-0.5">
-              <div className="flex flex-wrap items-center gap-2 mb-1.5">
-                <h1 className="text-xl md:text-2xl font-heading font-extrabold text-foreground leading-tight truncate">
-                  {s.full_name}
-                </h1>
-                <Badge className={cn("text-[10px] font-semibold border shrink-0", rCfg.badge)}>
-                  {risk === "high" && <AlertTriangle className="h-2.5 w-2.5 mr-0.5" />}
-                  {risk === "mid" && <Zap className="h-2.5 w-2.5 mr-0.5" />}
-                  {rCfg.label}
-                </Badge>
-                {s.group?.name && <Badge variant="secondary" className="text-xs shrink-0">{s.group.name}</Badge>}
-                {s.group?.profileName && <Badge variant="outline" className="text-xs shrink-0">{s.group.profileName}</Badge>}
-              </div>
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                {s.phone && (
-                  <a href={`tel:${s.phone}`} className="flex items-center gap-1 hover:text-foreground transition-colors">
-                    <Phone className="h-3 w-3" /> {s.phone}
-                  </a>
-                )}
-                {s.group?.curatorName && (
-                  <span className="flex items-center gap-1">
-                    <Star className="h-3 w-3 text-amber-400" /> Куратор: {s.group.curatorName}
-                  </span>
+                
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground mt-2">
+                  {s.phone && (
+                    <a href={`tel:${s.phone}`} className="flex items-center gap-1.5 hover:text-foreground transition-colors group/phone">
+                      <Phone className="h-4 w-4 text-muted-foreground/70 group-hover/phone:text-primary transition-colors" /> 
+                      <span className="font-medium">{s.phone}</span>
+                    </a>
+                  )}
+                  {s.group?.curatorName && (
+                    <span className="flex items-center gap-1.5">
+                      <Star className="h-4 w-4 text-amber-400" />
+                      Куратор: <span className="font-medium text-foreground/80">{s.group.curatorName}</span>
+                    </span>
+                  )}
+                  <Button
+                    variant="outline" size="sm" className="gap-1.5 text-xs h-7 sm:hidden"
+                    onClick={() => setReportModalOpen(true)}
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-primary" /> Отчет
+                  </Button>
+                </div>
+                
+                {h.consecutiveAbsences >= 2 && (
+                  <Badge className="mt-3 text-[11px] bg-red-100 text-red-700 border-red-200 font-medium px-2 py-0.5">
+                    <AlertTriangle className="h-3 w-3 mr-1.5" />
+                    {h.consecutiveAbsences} пропуска подряд
+                  </Badge>
                 )}
               </div>
-              {h.consecutiveAbsences >= 2 && (
-                <Badge className="mt-2 text-[10px] bg-red-100 text-red-700 border-red-200 dark:bg-red-900/40 dark:text-red-400">
-                  <AlertTriangle className="h-2.5 w-2.5 mr-1" />
-                  {h.consecutiveAbsences} пропуска подряд
-                </Badge>
-              )}
             </div>
 
-
-          </div>
-
-          {/* KPI cards */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-1">
+            {/* KPI cards */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-4 mt-2">
             <StatCard
               icon={Calendar} label="Посещаемость" value={`${h.attendanceRate ?? 0}%`}
               sub={`${h.presentCount ?? 0} из ${h.totalLessons ?? 0} уроков`}
@@ -1069,17 +1142,9 @@ export default function Student360Page() {
           </div>
         </div>
       </div>
-
-      {/* ── TAB BAR ────────────────────────────────────────────────────── */}
-      <div className="sticky top-12 z-20 bg-background border-b">
-        <div className="max-w-6xl mx-auto px-4 md:px-6 flex gap-0 overflow-x-auto scrollbar-none">
-          {tabs.map(t => (
-            <TabBtn key={t.key} active={tab === t.key} onClick={() => setTab(t.key)}>
-              {t.label}
-            </TabBtn>
-          ))}
-        </div>
       </div>
+
+
 
       {/* ── CONTENT ────────────────────────────────────────────────────── */}
       <div className="max-w-6xl mx-auto px-4 md:px-6 py-6">
@@ -1089,6 +1154,13 @@ export default function Student360Page() {
         {tab === "quizzes"       && <QuizzesTab s={s} />}
         {tab === "communication" && <CommunicationTab s={s} />}
       </div>
+
+      <ParentReportModal 
+        open={reportModalOpen} 
+        onOpenChange={setReportModalOpen} 
+        student={s} 
+        overview={s} 
+      />
     </div>
   );
 }

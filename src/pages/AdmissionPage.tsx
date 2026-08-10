@@ -700,7 +700,7 @@ export default function AdmissionPage() {
                         <TableRow key={row.id} className="hover:bg-muted/30">
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <GroupPersonAvatar groupName={row.group_name} size={22} showTooltip={false} />
+                              <GroupPersonAvatar groupName={row.group_name} avatarUrl={(row as any).group_avatar} size={22} showTooltip={false} />
                               <div>
                                 <p className="font-medium text-sm leading-tight">{row.full_name}</p>
                                 <p className="text-[11px] text-muted-foreground">{row.group_name}</p>
