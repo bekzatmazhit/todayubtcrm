@@ -83,9 +83,10 @@ app.use(globalLimiter);
 initializeDatabase();
 
 // Serve static assets EARLY so JS/CSS load fast (before API routes)
-const distDir = path.join(__dirname, "..", "dist");
+const distDir = path.resolve(__dirname, "..", "dist");
+console.log("📂 distDir resolved to:", distDir, "| exists:", fs.existsSync(distDir));
 if (fs.existsSync(distDir)) {
-  app.use(express.static(distDir));
+  app.use(express.static(distDir, { maxAge: '1d' }));
 }
 
 // ====================== HELPERS ======================
@@ -127,7 +128,7 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-app.post("/api/login", loginLimiter, (req, res) => {
+app.post("/api/login", loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: "Email and password required" });
@@ -138,7 +139,14 @@ app.post("/api/login", loginLimiter, (req, res) => {
     `).get(email);
 
     if (!user) return res.status(401).json({ error: "Invalid email or password" });
-    const passwordValid = user.password && (user.password.startsWith("$2") ? bcrypt.compareSync(password, user.password) : user.password === password);
+    let passwordValid = false;
+    if (user.password) {
+      if (user.password.startsWith("$2")) {
+        passwordValid = await bcrypt.compare(password, user.password);
+      } else {
+        passwordValid = user.password === password;
+      }
+    }
     if (!passwordValid) return res.status(401).json({ error: "Invalid email or password" });
 
     logAction(req, { action: "login", entityType: "user", entityId: user.id, entityName: user.name + " " + user.surname, userId: user.id, userName: user.name + " " + user.surname });
