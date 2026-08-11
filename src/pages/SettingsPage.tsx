@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { useEffect, useState, useRef, useCallback } from "react";
-import { fetchUser, updateUser, uploadAvatar, deleteAvatar } from "@/lib/api";
+import { fetchUser, updateUser, uploadAvatar, deleteAvatar, getSetting, updateSetting } from "@/lib/api";
 import { UserAvatar } from "@/components/UserAvatar";
 import { formatPhone } from "@/lib/utils";
 import {
@@ -56,6 +56,10 @@ export default function SettingsPage() {
   const [showNewPw, setShowNewPw] = useState(false);
   const [changingPw, setChangingPw] = useState(false);
 
+  // System Settings
+  const [openaiKey, setOpenaiKey] = useState("");
+  const [savingOpenai, setSavingOpenai] = useState(false);
+
   useEffect(() => {
     if (user) {
       fetchUser(user.id).then((data) => {
@@ -66,6 +70,11 @@ export default function SettingsPage() {
           setPhone(data.phone ? formatPhone(data.phone) : "");
         }
       });
+      if (user.role === 'admin') {
+        getSetting('openai_api_key').then(val => {
+          if (val) setOpenaiKey(val);
+        }).catch(() => {});
+      }
     }
   }, [user]);
 
@@ -176,6 +185,7 @@ export default function SettingsPage() {
           <TabsTrigger value="profile" className="flex-1">Профиль</TabsTrigger>
           <TabsTrigger value="security" className="flex-1">Безопасность</TabsTrigger>
           <TabsTrigger value="appearance" className="flex-1">Оформление</TabsTrigger>
+          {user?.role === 'admin' && <TabsTrigger value="system" className="flex-1">Система</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="profile">
@@ -552,6 +562,51 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {user?.role === 'admin' && (
+          <TabsContent value="system">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Settings className="h-4 w-4" />
+                  Системные настройки
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">OpenAI API Key (ChatGPT)</Label>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Используется для генерации отчетов для родителей с помощью ИИ. Ключ должен начинаться с <code>sk-...</code>
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      type="password"
+                      value={openaiKey}
+                      onChange={(e) => setOpenaiKey(e.target.value)}
+                      placeholder="sk-..."
+                      className="font-mono text-sm"
+                    />
+                    <Button 
+                      onClick={async () => {
+                        setSavingOpenai(true);
+                        try {
+                          await updateSetting('openai_api_key', openaiKey);
+                          toast.success("API ключ сохранен");
+                        } catch (e) {
+                          toast.error("Ошибка при сохранении ключа");
+                        }
+                        setSavingOpenai(false);
+                      }}
+                      disabled={savingOpenai}
+                    >
+                      {savingOpenai ? "Сохранение..." : "Сохранить"}
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

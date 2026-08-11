@@ -11,6 +11,7 @@ import { WebSocketServer } from "ws";
 import { initializeDatabase, db } from "./db.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
+import OpenAI from "openai";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsDir = path.join(__dirname, "uploads");
@@ -85,9 +86,7 @@ initializeDatabase();
 // Serve static assets EARLY so JS/CSS load fast (before API routes)
 const distDir = path.resolve(__dirname, "..", "dist");
 console.log("📂 distDir resolved to:", distDir, "| exists:", fs.existsSync(distDir));
-if (fs.existsSync(distDir)) {
-  app.use(express.static(distDir, { maxAge: '1d' }));
-}
+app.use(express.static(distDir, { maxAge: '1d' }));
 
 // ====================== HELPERS ======================
 
@@ -4330,17 +4329,66 @@ app.post("/api/specialties/bulk", (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ====================== SETTINGS ======================
+app.get("/api/settings/:key", (req, res) => {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(req.params.key);
+    res.json({ value: row ? row.value : null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put("/api/settings/:key", (req, res) => {
+  try {
+    const { value } = req.body;
+    db.prepare("INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP").run(req.params.key, value || "");
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ====================== OPENAI ======================
+app.post("/api/ai/generate-report", async (req, res) => {
+  try {
+    const apiKeyRow = db.prepare("SELECT value FROM settings WHERE key = 'openai_api_key'").get();
+    const apiKey = apiKeyRow?.value;
+    if (!apiKey) return res.status(400).json({ error: "OpenAI API Key не настроен в настройках CRM." });
+
+    const { action, studentName, month, stats, draft } = req.body;
+    const openai = new OpenAI({ apiKey });
+    
+    let prompt = "";
+    if (action === "improve") {
+      prompt = `Вы опытный и вежливый куратор образовательного центра. Ваша задача - отредактировать и улучшить текст "Итоги собрания" для родителей ученика.\nУченик: ${studentName}. Месяц: ${month}.\nСтатистика: Посещаемость ${stats.attendance}, ДЗ ${stats.homework}, ЕНТ ${stats.ent}.\nОтзывы учителей: ${stats.feedback}.\n\nЧерновик текста:\n"""\n${draft}\n"""\n\nУлучшите текст, исправьте синтаксис, сделайте его более профессиональным, вежливым и структурированным. Оставьте основные мысли, но подайте их красиво (сначала похвалите, затем конструктивная критика, затем рекомендации). Не используйте слишком сложные слова. Напишите только готовый текст без лишних вступлений.`;
+    } else {
+      prompt = `Вы опытный и вежливый куратор образовательного центра. Напишите текст "Итоги собрания" для родителей ученика.\nУченик: ${studentName}. Месяц: ${month}.\nСтатистика: Посещаемость ${stats.attendance}, ДЗ ${stats.homework}, ЕНТ ${stats.ent}.\nОтзывы учителей: ${stats.feedback}.\n\nНапишите профессиональный, структурированный и вежливый отчет (2-4 абзаца). Сначала похвалите за успехи, прокомментируйте посещаемость и ДЗ, затем добавьте конструктивную критику на основе отзывов, и дайте конкретные рекомендации. Напишите только готовый текст без лишних вступлений.`;
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.7,
+    });
+
+    res.json({ result: completion.choices[0].message.content.trim() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ====================== SPA FALLBACK (production) ======================
 // Must be LAST — after all API routes — so it only catches unmatched paths
-if (fs.existsSync(distDir)) {
-  console.log("✅ dist/ found at", distDir, "— SPA fallback enabled");
-  app.get("*", (req, res) => {
-    if (req.path.startsWith("/api/") || req.path.startsWith("/uploads/")) return res.status(404).json({ error: "Not found" });
-    res.sendFile(path.join(distDir, "index.html"));
-  });
-} else {
-  console.warn("⚠️  dist/ NOT found at", distDir, "— SPA fallback disabled. Run 'npm run build' first.");
-}
+app.get("*", (req, res) => {
+  if (req.path.startsWith("/api/") || req.path.startsWith("/uploads/")) {
+    return res.status(404).json({ error: "API Route Not found" });
+  }
+  
+  const indexPath = path.join(distDir, "index.html");
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    // If index.html is missing, return a clear error so we know it's our Node server responding
+    res.status(404).send("Node App Error: index.html not found in dist directory. Please run npm run build.");
+  }
+});
 
 // ====================== START ======================
 

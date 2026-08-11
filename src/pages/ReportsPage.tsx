@@ -6,12 +6,13 @@ import {
   fetchEntReport,
   fetchTeacherFeedbackByStudent,
   fetchMonthlyReport,
-  saveMonthlyReport
+  saveMonthlyReport,
+  generateAiReport
 } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Download, CheckCircle2, XCircle, FileText, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Loader2, Download, CheckCircle2, XCircle, FileText, TrendingUp, TrendingDown, Minus, Sparkles, Wand2, Save } from "lucide-react";
 import { toast } from "sonner";
 import html2pdf from "html2pdf.js";
 
@@ -54,6 +55,7 @@ export default function ReportsPage() {
   // Editor for meeting outcomes
   const [outcomes, setOutcomes] = useState('');
   const [saving, setSaving] = useState(false);
+  const [generatingAi, setGeneratingAi] = useState(false);
 
   const pdfRef = useRef<HTMLDivElement>(null);
 
@@ -188,6 +190,53 @@ export default function ReportsPage() {
         html2pdf().from(element).set(opt).save();
       }, 300);
 
+    } catch (e: any) {
+      toast.error('Ошибка сохранения: ' + e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAiAction = async (action: 'improve' | 'generate') => {
+    setGeneratingAi(true);
+    try {
+      const studentName = students.find(s => String(s.id) === selectedStudentId)?.full_name || 'Ученик';
+      const monthLabel = availableMonths.find(m => m.value === selectedMonth)?.label || selectedMonth;
+      
+      const res = await generateAiReport({
+        action,
+        studentName,
+        month: monthLabel,
+        stats: {
+          attendance: `${reportData.attendance.rate}% (${reportData.attendance.present} из ${reportData.attendance.total})`,
+          homework: `${reportData.homework.rate}% (${reportData.homework.done} из ${reportData.homework.total})`,
+          ent: reportData.ent.current > 0 ? reportData.ent.current : 'Нет данных',
+          feedback: reportData.feedback.map((fb: any) => `${fb.subject_name || 'Общее'} (${fb.teacher_name}): ${fb.comment}`).join('\n') || 'Нет отзывов'
+        },
+        draft: outcomes
+      });
+      
+      setOutcomes(res.result);
+      toast.success(action === 'improve' ? 'Текст улучшен ИИ ✨' : 'Текст сгенерирован ИИ ✨');
+    } catch (e: any) {
+      toast.error(e.message || 'Ошибка генерации');
+    } finally {
+      setGeneratingAi(false);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    if (!selectedStudentId || !selectedMonth) return;
+    setSaving(true);
+    try {
+      const sId = parseInt(selectedStudentId, 10);
+      await saveMonthlyReport(sId, selectedMonth, outcomes);
+      toast.success('Черновик сохранен в базе');
+      
+      setReportData((prev: any) => ({
+        ...prev,
+        report: { ...prev.report, summary: outcomes }
+      }));
     } catch (e: any) {
       toast.error('Ошибка сохранения: ' + e.message);
     } finally {
@@ -349,21 +398,60 @@ export default function ReportsPage() {
 
           <Card className="border-blue-200 shadow-md">
             <CardHeader className="bg-blue-50/50 border-b border-blue-100 rounded-t-xl pb-4">
-              <CardTitle className="text-xl flex items-center">
-                <FileText className="w-5 h-5 mr-2 text-blue-600" />
-                Итоги собрания (для родителя и учителя)
-              </CardTitle>
-              <CardDescription>Опишите решения, договоренности и рекомендации по итогам месяца.</CardDescription>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="text-xl flex items-center">
+                    <FileText className="w-5 h-5 mr-2 text-blue-600" />
+                    Итоги собрания (для родителя и учителя)
+                  </CardTitle>
+                  <CardDescription>Опишите решения, договоренности и рекомендации по итогам месяца.</CardDescription>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => handleAiAction('improve')}
+                    disabled={generatingAi || !outcomes.trim()}
+                    className="border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+                  >
+                    {generatingAi ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Wand2 className="w-4 h-4 mr-2" />}
+                    Улучшить текст (ИИ)
+                  </Button>
+                  <Button 
+                    variant="default" 
+                    size="sm"
+                    onClick={() => handleAiAction('generate')}
+                    disabled={generatingAi}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                  >
+                    {generatingAi ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                    Сгенерировать (ИИ)
+                  </Button>
+                </div>
+              </div>
             </CardHeader>
-            <CardContent className="pt-4">
+            <CardContent className="pt-4 relative">
               <textarea
                 value={outcomes}
                 onChange={e => setOutcomes(e.target.value)}
-                placeholder="Введите итоги собрания..."
-                className="w-full min-h-[200px] p-4 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-y"
+                placeholder="Введите итоги собрания или нажмите 'Сгенерировать (ИИ)'..."
+                className="w-full min-h-[200px] p-4 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-y text-base"
+                disabled={generatingAi}
               />
+              {generatingAi && (
+                <div className="absolute inset-0 bg-white/50 backdrop-blur-sm flex items-center justify-center z-10 rounded-md m-4">
+                  <div className="flex flex-col items-center text-indigo-600">
+                    <Loader2 className="w-8 h-8 animate-spin mb-2" />
+                    <span className="font-medium animate-pulse">ИИ думает...</span>
+                  </div>
+                </div>
+              )}
             </CardContent>
-            <div className="p-4 border-t bg-gray-50 rounded-b-xl flex justify-end">
+            <div className="p-4 border-t bg-gray-50 rounded-b-xl flex justify-between items-center flex-wrap gap-4">
+              <Button onClick={handleSaveDraft} disabled={saving} variant="outline" className="gap-2">
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                Сохранить черновик
+              </Button>
               <Button onClick={handleSaveAndDownload} disabled={saving} className="gap-2" size="lg">
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                 Сохранить и скачать PDF

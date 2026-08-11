@@ -634,6 +634,16 @@ export function initializeDatabase() {
     );
   `);
 
+  // General settings
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+
   // Permissions tables
   db.exec(`
     CREATE TABLE IF NOT EXISTS permissions (

@@ -1521,6 +1521,36 @@ export async function saveMonthlyReport(student_id: number, month: string, summa
   return res.json();
 }
 
+export async function getSetting(key: string) {
+  const res = await fetch(`${API_BASE}/settings/${key}`);
+  if (!res.ok) throw new Error("Failed to get setting");
+  const data = await res.json();
+  return data.value;
+}
+
+export async function updateSetting(key: string, value: string) {
+  const res = await fetch(`${API_BASE}/settings/${key}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value })
+  });
+  if (!res.ok) throw new Error("Failed to update setting");
+  return res.json();
+}
+
+export async function generateAiReport(data: { action: 'improve' | 'generate', studentName: string, month: string, stats: any, draft: string }) {
+  const res = await fetch(`${API_BASE}/ai/generate-report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || "Failed to generate report");
+  }
+  return res.json();
+}
+
 export async function deleteEntResults(student_id: number, month: string) {
   const res = await fetch(`${API_BASE}/ent-results?student_id=${student_id}&month=${month}`, { method: 'DELETE' });
   if (!res.ok) throw new Error("Failed to delete ENT results");
