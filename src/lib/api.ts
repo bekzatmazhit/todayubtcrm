@@ -1534,7 +1534,14 @@ export async function updateSetting(key: string, value: string) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value })
   });
-  if (!res.ok) throw new Error("Failed to update setting");
+  if (!res.ok) {
+    let errMsg = "Failed to update setting";
+    try {
+      const errData = await res.json();
+      if (errData.error) errMsg = errData.error;
+    } catch (e) {}
+    throw new Error(errMsg);
+  }
   return res.json();
 }
 

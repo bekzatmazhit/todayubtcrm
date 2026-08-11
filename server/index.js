@@ -4376,7 +4376,7 @@ app.post("/api/ai/generate-report", async (req, res) => {
 
 // ====================== SPA FALLBACK (production) ======================
 // Must be LAST — after all API routes — so it only catches unmatched paths
-app.get("*", (req, res) => {
+app.get(/.*/, (req, res) => {
   if (req.path.startsWith("/api/") || req.path.startsWith("/uploads/")) {
     return res.status(404).json({ error: "API Route Not found" });
   }
