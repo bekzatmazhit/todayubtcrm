@@ -4325,10 +4325,13 @@ app.post("/api/specialties/bulk", (req, res) => {
 // ====================== SPA FALLBACK (production) ======================
 // Must be LAST — after all API routes — so it only catches unmatched paths
 if (fs.existsSync(distDir)) {
-  app.use((req, res, next) => {
-    if (req.method !== "GET" || req.path.startsWith("/api/") || req.path.startsWith("/uploads/")) return next();
+  console.log("✅ dist/ found at", distDir, "— SPA fallback enabled");
+  app.get("*", (req, res) => {
+    if (req.path.startsWith("/api/") || req.path.startsWith("/uploads/")) return res.status(404).json({ error: "Not found" });
     res.sendFile(path.join(distDir, "index.html"));
   });
+} else {
+  console.warn("⚠️  dist/ NOT found at", distDir, "— SPA fallback disabled. Run 'npm run build' first.");
 }
 
 // ====================== START ======================
