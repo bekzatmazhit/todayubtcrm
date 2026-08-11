@@ -592,8 +592,8 @@ export default function SettingsPage() {
                         try {
                           await updateSetting('openai_api_key', openaiKey);
                           toast.success("API ключ сохранен");
-                        } catch (e) {
-                          toast.error("Ошибка при сохранении ключа");
+                        } catch (e: any) {
+                          toast.error("Ошибка при сохранении ключа: " + (e.message || ''));
                         }
                         setSavingOpenai(false);
                       }}
