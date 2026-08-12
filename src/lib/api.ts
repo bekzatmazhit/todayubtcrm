@@ -311,9 +311,10 @@ export async function fetchQuizzes(params?: { group_id?: number; subject_id?: nu
   return await res.json();
 }
 
-export async function fetchStudents() {
+export async function fetchStudents(group_id?: number) {
   try {
-    const res = await fetch(`${API_BASE}/students`, defaultOptions);
+    const url = group_id ? `${API_BASE}/students?group_id=${group_id}` : `${API_BASE}/students`;
+    const res = await fetch(url, defaultOptions);
     if (!res.ok) throw new Error("Failed to fetch students");
     return await res.json();
   } catch (error) {
@@ -1511,11 +1512,18 @@ export async function fetchMonthlyReport(student_id: number, month: string) {
   return res.json();
 }
 
-export async function saveMonthlyReport(student_id: number, month: string, summary: string) {
+export async function fetchMonthlyReportsHistory(student_id: number) {
+  const params = new URLSearchParams({ student_id: student_id.toString() });
+  const res = await fetch(`${API_BASE}/monthly-reports/history?${params.toString()}`);
+  if (!res.ok) throw new Error("Failed to fetch monthly reports history");
+  return res.json();
+}
+
+export async function saveMonthlyReport(student_id: number, month: string, summary: string, teacher_summary?: string, stats_json?: string) {
   const res = await fetch(`${API_BASE}/monthly-reports`, {
     method: 'POST',
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ student_id, month, summary }),
+    body: JSON.stringify({ student_id, month, summary, teacher_summary, stats_json }),
   });
   if (!res.ok) throw new Error("Failed to save monthly report");
   return res.json();
@@ -1545,7 +1553,7 @@ export async function updateSetting(key: string, value: string) {
   return res.json();
 }
 
-export async function generateAiReport(data: { action: 'improve' | 'generate', studentName: string, month: string, stats: any, draft: string }) {
+export async function generateAiReport(data: { action: 'improve' | 'generate' | 'process-feedback', studentName: string, month: string, stats: any, draft: string }) {
   const res = await fetch(`${API_BASE}/ai/generate-report`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

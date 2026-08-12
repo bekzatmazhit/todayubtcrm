@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { useEffect, useState, useRef, useCallback } from "react";
@@ -246,10 +247,27 @@ export default function SettingsPage() {
                           Загрузить фото
                         </Button>
                         {(profile?.avatar_url || user?.avatar_url) && (
-                          <Button size="sm" variant="ghost" className="h-8 text-xs gap-1 text-destructive hover:text-destructive" onClick={handleAvatarDelete} disabled={uploadingAvatar}>
-                            <Trash2 className="h-3 w-3" />
-                            Удалить
-                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button size="sm" variant="ghost" className="h-8 text-xs gap-1 text-destructive hover:text-destructive" disabled={uploadingAvatar}>
+                                <Trash2 className="h-3.5 w-3.5" /> Удалить фото
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Удалить фото профиля?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Это действие нельзя отменить. Ваше текущее фото профиля будет безвозвратно удалено.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Отмена</AlertDialogCancel>
+                                <AlertDialogAction onClick={handleAvatarDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                                  Да, удалить
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
                         )}
                       </>
                     )}

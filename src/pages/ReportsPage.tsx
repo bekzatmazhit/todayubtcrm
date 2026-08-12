@@ -6,15 +6,23 @@ import {
   fetchEntReport,
   fetchTeacherFeedbackByStudent,
   fetchMonthlyReport,
+  fetchMonthlyReportsHistory,
   saveMonthlyReport,
   generateAiReport
 } from '@/lib/api';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Download, CheckCircle2, XCircle, FileText, TrendingUp, TrendingDown, Minus, Sparkles, Wand2, Save } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { Loader2, Download, Search, FileText, Sparkles, MessageCircle, Send, Plus, RefreshCw, Calendar, TrendingUp, AlertCircle, Wand2, Save } from "lucide-react";
 import { toast } from "sonner";
 import html2pdf from "html2pdf.js";
+import ReportPDFTemplate from '@/components/ReportPDFTemplate';
+import { Badge } from '@/components/ui/badge';
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 // Генерируем последние 12 месяцев
 const generateMonths = () => {
@@ -26,7 +34,6 @@ const generateMonths = () => {
     const m = new Date(date.getFullYear(), date.getMonth() - i, 1);
     const value = `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`;
     const label = formatter.format(m);
-    // Делаем с большой буквы
     months.push({ 
       value, 
       label: label.charAt(0).toUpperCase() + label.slice(1) 
@@ -40,6 +47,7 @@ export default function ReportsPage() {
   
   const [groups, setGroups] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
@@ -51,17 +59,28 @@ export default function ReportsPage() {
   // Data for report
   const [reportData, setReportData] = useState<any>(null);
   const [loadingData, setLoadingData] = useState(false);
+  
+  // History
+  const [historyData, setHistoryData] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Editor for meeting outcomes
   const [outcomes, setOutcomes] = useState('');
+  const [teacherSummary, setTeacherSummary] = useState('');
   const [saving, setSaving] = useState(false);
   const [generatingAi, setGeneratingAi] = useState(false);
+  const [generatingTeacherAi, setGeneratingTeacherAi] = useState(false);
 
   const pdfRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setLoadingGroups(true);
-    fetchGroups().then(setGroups).catch(console.error).finally(() => setLoadingGroups(false));
+    fetchGroups().then((res) => {
+      setGroups(res);
+      if (res.length > 0 && !selectedGroupId) {
+        setSelectedGroupId(String(res[0].id));
+      }
+    }).catch(console.error).finally(() => setLoadingGroups(false));
   }, []);
 
   useEffect(() => {
@@ -70,23 +89,39 @@ export default function ReportsPage() {
       fetchStudents(parseInt(selectedGroupId, 10)).then((res: any) => {
         const list = Array.isArray(res) ? res : (res.students || []);
         setStudents(list);
-        setSelectedStudentId(''); // reset student when group changes
+        setSelectedStudentId(''); 
         setReportData(null);
+        setHistoryData([]);
       }).catch(console.error).finally(() => setLoadingStudents(false));
     } else {
       setStudents([]);
       setSelectedStudentId('');
       setReportData(null);
+      setHistoryData([]);
     }
   }, [selectedGroupId]);
 
   useEffect(() => {
     if (selectedStudentId && selectedMonth) {
       loadStudentData();
+      loadStudentHistory();
     } else {
       setReportData(null);
     }
   }, [selectedStudentId, selectedMonth]);
+
+  const loadStudentHistory = async () => {
+    if (!selectedStudentId) return;
+    setLoadingHistory(true);
+    try {
+      const data = await fetchMonthlyReportsHistory(parseInt(selectedStudentId, 10));
+      setHistoryData(data || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
 
   const loadStudentData = async () => {
     setLoadingData(true);
@@ -94,7 +129,6 @@ export default function ReportsPage() {
       const sId = parseInt(selectedStudentId, 10);
       const gId = parseInt(selectedGroupId, 10);
       
-      // Calculate 3 months ago for ENT trend
       const [y, m] = selectedMonth.split('-');
       const d = new Date(parseInt(y), parseInt(m) - 1, 1);
       d.setMonth(d.getMonth() - 3);
@@ -107,7 +141,6 @@ export default function ReportsPage() {
         fetchMonthlyReport(sId, selectedMonth)
       ]);
 
-      // Filter attendance for this student
       const studentAtt = (attRes.rows || []).filter((r: any) => r.student_id === sId);
       const present = studentAtt.filter((r: any) => r.status === 'present').length;
       const total = studentAtt.length;
@@ -117,12 +150,10 @@ export default function ReportsPage() {
       const hwDone = studentAtt.filter((r: any) => r.homework === 'done').length;
       const hwRate = hwTotal > 0 ? Math.round((hwDone / hwTotal) * 100) : 0;
 
-      // Filter ENT for this student and sort by month
       const studentEnt = (entRes.rows || [])
         .filter((r: any) => r.student_id === sId)
         .sort((a: any, b: any) => a.month.localeCompare(b.month));
 
-      // Group ENT by month to find total score per month
       const entByMonthMap = new Map();
       studentEnt.forEach((r: any) => {
         if (!entByMonthMap.has(r.month)) entByMonthMap.set(r.month, 0);
@@ -135,9 +166,7 @@ export default function ReportsPage() {
       if (entTrends.length > 0) {
         currentEnt = entTrends.find(t => t.month === selectedMonth)?.score || 0;
         const past = entTrends.filter(t => t.month < selectedMonth);
-        if (past.length > 0) {
-          prevEnt = past[past.length - 1].score;
-        }
+        if (past.length > 0) prevEnt = past[past.length - 1].score;
       }
 
       setReportData({
@@ -149,6 +178,7 @@ export default function ReportsPage() {
       });
 
       setOutcomes(reportRes?.summary || '');
+      setTeacherSummary(reportRes?.teacher_summary || '');
 
     } catch (e: any) {
       toast.error('Ошибка загрузки данных: ' + e.message);
@@ -157,44 +187,82 @@ export default function ReportsPage() {
     }
   };
 
-  const handleSaveAndDownload = async () => {
+  const handleSave = async (silent = false) => {
     if (!selectedStudentId || !selectedMonth) return;
     setSaving(true);
     try {
       const sId = parseInt(selectedStudentId, 10);
-      await saveMonthlyReport(sId, selectedMonth, outcomes);
-      toast.success('Итоги сохранены!');
+      await saveMonthlyReport(sId, selectedMonth, outcomes, teacherSummary, JSON.stringify(reportData));
+      if (!silent) toast.success('Итоги сохранены!');
       
-      // Update local state so PDF sees the latest outcomes
       setReportData((prev: any) => ({
         ...prev,
-        report: { ...prev.report, summary: outcomes }
+        report: { ...prev.report, summary: outcomes, teacher_summary: teacherSummary }
       }));
-
-      // Generate PDF
-      setTimeout(() => {
-        const element = pdfRef.current;
-        if (!element) return;
-        
-        const studentName = students.find(s => String(s.id) === selectedStudentId)?.full_name || 'Ученик';
-        const monthLabel = availableMonths.find(m => m.value === selectedMonth)?.label || selectedMonth;
-        
-        const opt = {
-          margin:       [10, 10, 10, 10], // top, left, bottom, right
-          filename:     `Отчет_${studentName}_${selectedMonth}.pdf`,
-          image:        { type: 'jpeg', quality: 0.98 },
-          html2canvas:  { scale: 2, useCORS: true, windowWidth: 800 },
-          jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
-        };
-        
-        html2pdf().from(element).set(opt).save();
-      }, 300);
-
+      // Refresh history
+      loadStudentHistory();
     } catch (e: any) {
-      toast.error('Ошибка сохранения: ' + e.message);
+      if (!silent) toast.error('Ошибка сохранения: ' + e.message);
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSaveAndDownload = async () => {
+    await handleSave(true);
+    
+    // Give React time to reconcile the latest data into the hidden template
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    const wrapper = pdfRef.current?.parentElement?.parentElement;
+    const element = pdfRef.current;
+    if (!element || !wrapper) {
+      toast.error('PDF элемент не найден');
+      return;
+    }
+    
+    // Temporarily make visible for html2canvas (it needs layout)
+    const origStyle = wrapper.style.cssText;
+    wrapper.style.cssText = 'position:fixed;left:0;top:0;z-index:-1;opacity:0.01;pointer-events:none;overflow:visible;width:auto;height:auto;';
+    
+    const studentName = students.find(s => String(s.id) === selectedStudentId)?.full_name || 'Ученик';
+    try {
+      const opt = {
+        margin:       [5, 5, 5, 5],
+        filename:     `Отчет_${studentName}_${selectedMonth}.pdf`,
+        image:        { type: 'png', quality: 1 },
+        html2canvas:  { scale: 3, useCORS: true, windowWidth: 794, logging: false, backgroundColor: '#FFFFFF' },
+        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' as const }
+      };
+      await html2pdf().from(element).set(opt).save();
+      toast.success('PDF скачан!');
+    } catch (e: any) {
+      toast.error('Ошибка генерации PDF: ' + e.message);
+    } finally {
+      // Restore hidden state
+      wrapper.style.cssText = origStyle;
+    }
+  };
+
+  const sendToWA = async () => {
+    await handleSave(true);
+    const student = students.find(s => String(s.id) === selectedStudentId);
+    if (!student || !student.parent_phone) {
+      toast.error("Нет номера телефона родителя");
+      return;
+    }
+    const phone = student.parent_phone.replace(/\D/g, '');
+    
+    // Формируем текст
+    const monthLabel = availableMonths.find(m => m.value === selectedMonth)?.label || selectedMonth;
+    let text = `Здравствуйте! Это отчет за ${monthLabel} по ученику ${student.full_name}.\n\n`;
+    if (reportData?.attendance) text += `Посещаемость: ${reportData.attendance.rate}%\n`;
+    if (reportData?.ent?.current) text += `ЕНТ балл: ${reportData.ent.current}\n\n`;
+    if (teacherSummary) text += `Отзыв преподавателей:\n${teacherSummary}\n\n`;
+    if (outcomes) text += `Итоги и рекомендации:\n${outcomes}\n`;
+    
+    const url = `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
   };
 
   const handleAiAction = async (action: 'improve' | 'generate') => {
@@ -225,412 +293,418 @@ export default function ReportsPage() {
     }
   };
 
-  const handleSaveDraft = async () => {
-    if (!selectedStudentId || !selectedMonth) return;
-    setSaving(true);
+  const handleTeacherAiAction = async () => {
+    setGeneratingTeacherAi(true);
     try {
-      const sId = parseInt(selectedStudentId, 10);
-      await saveMonthlyReport(sId, selectedMonth, outcomes);
-      toast.success('Черновик сохранен в базе');
+      const studentName = students.find(s => String(s.id) === selectedStudentId)?.full_name || 'Ученик';
+      const monthLabel = availableMonths.find(m => m.value === selectedMonth)?.label || selectedMonth;
       
-      setReportData((prev: any) => ({
-        ...prev,
-        report: { ...prev.report, summary: outcomes }
-      }));
+      const res = await generateAiReport({
+        action: 'process-feedback',
+        studentName,
+        month: monthLabel,
+        stats: {
+          attendance: '',
+          homework: '',
+          ent: '',
+          feedback: reportData.feedback.map((fb: any) => `${fb.subject_name || 'Общее'} (${fb.teacher_name}): ${fb.comment}`).join('\n') || 'Нет отзывов'
+        },
+        draft: ''
+      });
+      
+      setTeacherSummary(res.result);
+      toast.success('Сводка преподавателей готова ✨');
     } catch (e: any) {
-      toast.error('Ошибка сохранения: ' + e.message);
+      toast.error(e.message || 'Ошибка генерации');
     } finally {
-      setSaving(false);
+      setGeneratingTeacherAi(false);
     }
   };
 
-  const studentName = students.find(s => String(s.id) === selectedStudentId)?.full_name || '...';
-  const groupName = groups.find(g => String(g.id) === selectedGroupId)?.name || '...';
-  const monthLabel = availableMonths.find(m => m.value === selectedMonth)?.label || selectedMonth;
+  const filteredStudents = students.filter(s => s.full_name.toLowerCase().includes(searchQuery.toLowerCase()));
+  const selectedStudentObj = students.find(s => String(s.id) === selectedStudentId);
+  
+  const getStatusColor = (sId: number) => {
+    // В идеале мы бы вытягивали статусы всех студентов в группе одним запросом, 
+    // но пока просто покажем серый, если это не текущий выбранный студент (или если есть данные)
+    if (String(sId) === selectedStudentId && reportData) {
+      if (outcomes.length > 50) return "bg-green-500";
+      if (outcomes.length > 0) return "bg-yellow-400";
+      return "bg-red-400";
+    }
+    return "bg-gray-300";
+  };
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">Персональные отчеты</h1>
-          <p className="text-gray-500 mt-1">Формирование детального отчета для родительского собрания.</p>
+    <div className="flex h-[calc(100vh-64px)] w-full overflow-hidden bg-white text-sm">
+      
+      {/* 1. Левая колонка: Навигация */}
+      <div className="w-1/4 min-w-[280px] max-w-[320px] bg-gray-50/50 border-r border-gray-200 flex flex-col h-full">
+        <div className="p-4 border-b border-gray-200 flex flex-col gap-3 shrink-0">
+          <div className="flex gap-2">
+            <Select value={selectedGroupId} onValueChange={setSelectedGroupId} disabled={loadingGroups}>
+              <SelectTrigger className="w-full bg-white shadow-sm border-gray-200 h-9">
+                <SelectValue placeholder="Выберите группу" />
+              </SelectTrigger>
+              <SelectContent>
+                {groups.map(g => (
+                  <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+              <SelectTrigger className="w-full bg-white shadow-sm border-gray-200 h-9">
+                <SelectValue placeholder="Месяц" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableMonths.map(m => (
+                  <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2 h-4 w-4 text-gray-400" />
+            <Input 
+              placeholder="Поиск ученика..." 
+              className="pl-9 bg-white shadow-sm h-9 border-gray-200"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+            />
+          </div>
         </div>
+        
+        <ScrollArea className="flex-1">
+          <div className="p-2 space-y-1">
+            {loadingStudents ? (
+              <div className="flex items-center justify-center p-8 text-gray-400"><Loader2 className="h-5 w-5 animate-spin" /></div>
+            ) : filteredStudents.length === 0 ? (
+              <div className="text-center p-8 text-gray-400 text-xs">Нет учеников</div>
+            ) : (
+              filteredStudents.map(student => (
+                <button
+                  key={student.id}
+                  onClick={() => setSelectedStudentId(String(student.id))}
+                  className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 transition-colors ${
+                    selectedStudentId === String(student.id) 
+                      ? 'bg-primary/5 border border-primary/20 shadow-sm' 
+                      : 'hover:bg-gray-100/50 border border-transparent'
+                  }`}
+                >
+                  <div className="relative">
+                    <Avatar className="h-8 w-8 border border-gray-200 shadow-sm">
+                      <AvatarImage src={student.avatar_url} />
+                      <AvatarFallback className="bg-white text-xs text-gray-600">{student.full_name.substring(0,2)}</AvatarFallback>
+                    </Avatar>
+                    <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${getStatusColor(student.id)}`} />
+                  </div>
+                  <div className="flex-1 truncate">
+                    <div className="font-medium text-gray-900 truncate leading-tight">{student.full_name}</div>
+                    <div className="text-xs text-gray-500 truncate mt-0.5">{student.parent_phone || 'Нет номера'}</div>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </ScrollArea>
       </div>
 
-      <Card>
-        <CardContent className="p-4 md:p-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Группа</label>
-              <Select value={selectedGroupId} onValueChange={setSelectedGroupId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Выберите группу" />
-                </SelectTrigger>
-                <SelectContent>
-                  {groups.map(g => (
-                    <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+      {/* 2. Центральная колонка: Рабочая область */}
+      <div className="flex-1 bg-white flex flex-col h-full overflow-hidden relative">
+        {!selectedStudentId ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+            <div className="w-16 h-16 rounded-2xl bg-gray-50 border border-gray-100 flex items-center justify-center mb-4 shadow-sm">
+              <FileText className="h-8 w-8 text-gray-300" />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Ученик</label>
-              <Select value={selectedStudentId} onValueChange={setSelectedStudentId} disabled={!selectedGroupId || loadingStudents}>
-                <SelectTrigger>
-                  <SelectValue placeholder={loadingStudents ? "Загрузка..." : "Выберите ученика"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {students.map(s => (
-                    <SelectItem key={s.id} value={String(s.id)}>{s.full_name || s.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Месяц</label>
-              <Select value={selectedMonth} onValueChange={setSelectedMonth}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableMonths.map(m => (
-                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <h3 className="text-lg font-medium text-gray-900">Отчет не выбран</h3>
+            <p className="text-sm mt-1">Выберите ученика из списка слева для работы</p>
           </div>
-        </CardContent>
-      </Card>
-
-      {!selectedStudentId ? (
-        <div className="text-center py-12 text-gray-500">
-          Выберите группу и ученика для просмотра отчета
-        </div>
-      ) : loadingData ? (
-        <div className="flex justify-center py-12">
-          <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-        </div>
-      ) : reportData ? (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Card className="bg-blue-50 border-blue-100">
-              <CardContent className="p-6 text-center">
-                <p className="text-sm font-medium text-blue-600 mb-2">Посещаемость</p>
-                <div className="text-4xl font-bold text-blue-900 mb-1">{reportData.attendance.rate}%</div>
-                <p className="text-xs text-blue-600">Присутствовал на {reportData.attendance.present} из {reportData.attendance.total} уроков</p>
-              </CardContent>
-            </Card>
-            <Card className="bg-green-50 border-green-100">
-              <CardContent className="p-6 text-center">
-                <p className="text-sm font-medium text-green-600 mb-2">Домашние задания</p>
-                <div className="text-4xl font-bold text-green-900 mb-1">{reportData.homework.rate}%</div>
-                <p className="text-xs text-green-600">Выполнено {reportData.homework.done} из {reportData.homework.total} заданий</p>
-              </CardContent>
-            </Card>
-            <Card className="bg-purple-50 border-purple-100">
-              <CardContent className="p-6 text-center">
-                <p className="text-sm font-medium text-purple-600 mb-2">Пробное ЕНТ ({monthLabel})</p>
-                <div className="flex justify-center items-center gap-2 mb-1">
-                  <div className="text-4xl font-bold text-purple-900">{reportData.ent.current > 0 ? reportData.ent.current : '—'}</div>
-                  {reportData.ent.prev > 0 && reportData.ent.current > 0 && (
-                    <div className={`flex items-center text-sm font-medium ${reportData.ent.current > reportData.ent.prev ? 'text-green-600' : reportData.ent.current < reportData.ent.prev ? 'text-red-600' : 'text-gray-500'}`}>
-                      {reportData.ent.current > reportData.ent.prev ? <TrendingUp className="w-4 h-4 mr-1" /> : reportData.ent.current < reportData.ent.prev ? <TrendingDown className="w-4 h-4 mr-1" /> : <Minus className="w-4 h-4 mr-1" />}
-                      {Math.abs(reportData.ent.current - reportData.ent.prev)}
-                    </div>
-                  )}
-                </div>
-                <p className="text-xs text-purple-600">
-                  В прошлом месяце: {reportData.ent.prev > 0 ? reportData.ent.prev : 'Нет данных'}
-                </p>
-              </CardContent>
-            </Card>
+        ) : loadingData ? (
+          <div className="flex-1 flex items-center justify-center text-gray-400">
+            <Loader2 className="h-6 w-6 animate-spin" />
           </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Детализация уроков</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="max-h-60 overflow-y-auto pr-2 space-y-2">
-                  {reportData.attendance.list.length === 0 ? (
-                    <p className="text-sm text-gray-500 text-center py-4">Нет записей об уроках в этом месяце</p>
-                  ) : (
-                    reportData.attendance.list.map((att: any, idx: number) => (
-                      <div key={idx} className="flex items-center justify-between p-2 rounded bg-gray-50 text-sm">
-                        <div className="font-medium w-24">{new Date(att.date).toLocaleDateString('ru-RU')}</div>
-                        <div className="flex-1 truncate px-2 text-gray-600" title={att.subject_name}>{att.subject_name}</div>
-                        <div className="flex gap-2">
-                          {att.status === 'present' ? <CheckCircle2 className="w-4 h-4 text-green-500" title="Присутствовал" /> : <XCircle className="w-4 h-4 text-red-500" title="Отсутствовал" />}
-                          {att.homework === 'done' ? <FileText className="w-4 h-4 text-green-500" title="ДЗ Выполнено" /> : att.homework === 'not_done' ? <FileText className="w-4 h-4 text-red-500" title="ДЗ Не выполнено" /> : <FileText className="w-4 h-4 text-gray-300" title="Нет ДЗ" />}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Отзывы преподавателей</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="max-h-60 overflow-y-auto pr-2 space-y-3">
-                  {reportData.feedback.length === 0 ? (
-                    <p className="text-sm text-gray-500 text-center py-4">Нет отзывов в этом месяце</p>
-                  ) : (
-                    reportData.feedback.map((fb: any, idx: number) => (
-                      <div key={idx} className="p-3 rounded-lg border bg-amber-50/50">
-                        <div className="flex justify-between items-start mb-1">
-                          <span className="font-medium text-sm text-gray-900">{fb.subject_name || 'Общее'}</span>
-                          <span className="text-xs text-gray-500">{fb.teacher_name}</span>
-                        </div>
-                        <p className="text-sm text-gray-700 whitespace-pre-wrap">{fb.comment}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card className="border-blue-200 shadow-md">
-            <CardHeader className="bg-blue-50/50 border-b border-blue-100 rounded-t-xl pb-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <CardTitle className="text-xl flex items-center">
-                    <FileText className="w-5 h-5 mr-2 text-blue-600" />
-                    Итоги собрания (для родителя и учителя)
-                  </CardTitle>
-                  <CardDescription>Опишите решения, договоренности и рекомендации по итогам месяца.</CardDescription>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => handleAiAction('improve')}
-                    disabled={generatingAi || !outcomes.trim()}
-                    className="border-indigo-200 text-indigo-700 hover:bg-indigo-50"
-                  >
-                    {generatingAi ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Wand2 className="w-4 h-4 mr-2" />}
-                    Улучшить текст (ИИ)
-                  </Button>
-                  <Button 
-                    variant="default" 
-                    size="sm"
-                    onClick={() => handleAiAction('generate')}
-                    disabled={generatingAi}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white"
-                  >
-                    {generatingAi ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-                    Сгенерировать (ИИ)
-                  </Button>
+        ) : (
+          <>
+            {/* Header */}
+            <div className="px-8 py-5 border-b border-gray-100 flex items-center justify-between shrink-0 bg-white z-10">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
+                  {selectedStudentObj?.full_name}
+                </h2>
+                <div className="text-sm text-gray-500 mt-1 flex items-center gap-2">
+                  <Badge variant="secondary" className="bg-gray-100 text-gray-600 hover:bg-gray-100 font-normal shadow-none border-0">
+                    {groups.find(g => String(g.id) === selectedGroupId)?.name}
+                  </Badge>
+                  <span>•</span>
+                  <span>{availableMonths.find(m => m.value === selectedMonth)?.label}</span>
                 </div>
               </div>
-            </CardHeader>
-            <CardContent className="pt-4 relative">
-              <textarea
-                value={outcomes}
-                onChange={e => setOutcomes(e.target.value)}
-                placeholder="Введите итоги собрания или нажмите 'Сгенерировать (ИИ)'..."
-                className="w-full min-h-[200px] p-4 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-y text-base"
-                disabled={generatingAi}
-              />
-              {generatingAi && (
-                <div className="absolute inset-0 bg-white/50 backdrop-blur-sm flex items-center justify-center z-10 rounded-md m-4">
-                  <div className="flex flex-col items-center text-indigo-600">
-                    <Loader2 className="w-8 h-8 animate-spin mb-2" />
-                    <span className="font-medium animate-pulse">ИИ думает...</span>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-            <div className="p-4 border-t bg-gray-50 rounded-b-xl flex justify-between items-center flex-wrap gap-4">
-              <Button onClick={handleSaveDraft} disabled={saving} variant="outline" className="gap-2">
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                Сохранить черновик
-              </Button>
-              <Button onClick={handleSaveAndDownload} disabled={saving} className="gap-2" size="lg">
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                Сохранить и скачать PDF
-              </Button>
-            </div>
-          </Card>
-        </div>
-      ) : null}
-
-      {/* Hidden PDF Layout */}
-      <div style={{ position: 'absolute', top: '-9999px', left: '-9999px' }}>
-        {reportData && (
-          <div ref={pdfRef} className="bg-white text-slate-900 font-sans shadow-2xl relative overflow-hidden" style={{ width: '800px', minHeight: '1131px' }}>
-            
-            {/* Header Background */}
-            <div className="absolute top-0 left-0 right-0 h-40 bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-900 z-0"></div>
-
-            <div className="relative z-10 px-10 pt-10 pb-8">
-              {/* BRANDING */}
-              <div className="flex justify-between items-start mb-6 text-white">
-                <div>
-                  <h1 className="text-4xl font-black uppercase tracking-widest drop-shadow-md">TODAY UBT</h1>
-                  <p className="text-blue-200 text-sm tracking-[0.2em] font-semibold mt-1">АКАДЕМИЧЕСКИЙ ОТЧЕТ</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm text-blue-100 font-medium">Отчетный период</p>
-                  <p className="text-xl font-bold">{monthLabel}</p>
-                </div>
-              </div>
-
-              {/* STUDENT PROFILE CARD */}
-              <div className="bg-white rounded-2xl shadow-lg p-6 flex justify-between items-center border border-slate-100">
-                <div>
-                  <p className="text-sm text-slate-400 font-bold uppercase tracking-wider mb-1">Ученик</p>
-                  <h2 className="text-2xl font-bold text-slate-800">{studentName}</h2>
-                </div>
-                <div className="text-right border-l-2 border-slate-100 pl-6">
-                  <p className="text-sm text-slate-400 font-bold uppercase tracking-wider mb-1">Группа</p>
-                  <h2 className="text-2xl font-bold text-indigo-600">{groupName}</h2>
-                </div>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => handleSave(false)} disabled={saving} className="h-9">
+                  {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+                  Черновик
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleSaveAndDownload} disabled={saving} className="h-9">
+                  <Download className="h-4 w-4 mr-2" /> PDF
+                </Button>
+                <Button size="sm" onClick={sendToWA} className="h-9 bg-[#25D366] hover:bg-[#20bd5a] text-white border-0 shadow-sm">
+                  <Send className="h-4 w-4 mr-2" />
+                  Отправить в WA
+                </Button>
               </div>
             </div>
 
-            <div className="px-10 pb-10">
-              {/* KEY METRICS */}
-              <div className="grid grid-cols-3 gap-6 mb-8 mt-2">
-                <div className="bg-gradient-to-br from-blue-50 to-blue-100/50 p-5 rounded-2xl border border-blue-100/50 shadow-sm relative overflow-hidden">
-                  <div className="absolute -right-4 -bottom-4 opacity-5">
-                     <span className="text-9xl font-black">%</span>
-                  </div>
-                  <p className="text-xs text-blue-800 font-bold mb-2 uppercase tracking-widest">Посещаемость</p>
-                  <p className="text-4xl font-black text-blue-900">{reportData.attendance.rate}%</p>
-                  <p className="text-sm text-blue-700/80 mt-2 font-medium">{reportData.attendance.present} из {reportData.attendance.total} уроков</p>
-                </div>
-
-                <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/50 p-5 rounded-2xl border border-emerald-100/50 shadow-sm relative overflow-hidden">
-                  <div className="absolute -right-4 -bottom-4 opacity-5">
-                     <span className="text-9xl font-black">✓</span>
-                  </div>
-                  <p className="text-xs text-emerald-800 font-bold mb-2 uppercase tracking-widest">Выполнение ДЗ</p>
-                  <p className="text-4xl font-black text-emerald-900">{reportData.homework.rate}%</p>
-                  <p className="text-sm text-emerald-700/80 mt-2 font-medium">{reportData.homework.done} из {reportData.homework.total} заданий</p>
-                </div>
-
-                <div className="bg-gradient-to-br from-purple-50 to-purple-100/50 p-5 rounded-2xl border border-purple-100/50 shadow-sm relative overflow-hidden">
-                   <div className="absolute -right-4 -bottom-4 opacity-5">
-                     <span className="text-9xl font-black">★</span>
-                  </div>
-                  <p className="text-xs text-purple-800 font-bold mb-2 uppercase tracking-widest">ЕНТ Балл</p>
-                  <div className="flex items-end gap-3">
-                    <p className="text-4xl font-black text-purple-900">{reportData.ent.current > 0 ? reportData.ent.current : '—'}</p>
-                    {reportData.ent.current > 0 && reportData.ent.prev > 0 && (
-                       <span className={`text-sm font-bold mb-1 ${reportData.ent.current > reportData.ent.prev ? 'text-emerald-600' : reportData.ent.current < reportData.ent.prev ? 'text-red-500' : 'text-slate-500'}`}>
-                         {reportData.ent.current > reportData.ent.prev ? '+' : ''}{reportData.ent.current - reportData.ent.prev}
-                       </span>
-                    )}
-                  </div>
-                  <p className="text-sm text-purple-700/80 mt-2 font-medium">
-                    Прошлый месяц: <span className="font-bold">{reportData.ent.prev > 0 ? reportData.ent.prev : '—'}</span>
-                  </p>
-                </div>
-              </div>
-
-              {/* TWO COLUMNS: Attendance Details & Feedback */}
-              <div className="grid grid-cols-[1.2fr_1fr] gap-8 mb-8" style={{ pageBreakInside: 'avoid' }}>
-                {/* ATTENDANCE TABLE */}
-                <div>
-                  <h3 className="font-bold text-slate-800 pb-2 mb-4 uppercase tracking-widest text-xs flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span>
-                    Детализация посещаемости
-                  </h3>
-                  <div className="rounded-xl overflow-hidden border border-slate-200">
-                    <table className="w-full text-[11px] text-left">
-                      <thead className="bg-slate-100 text-slate-600 uppercase tracking-wider font-semibold">
-                        <tr>
-                          <th className="py-2.5 px-3">Дата</th>
-                          <th className="py-2.5 px-3">Предмет</th>
-                          <th className="py-2.5 px-3 text-center">Урок</th>
-                          <th className="py-2.5 px-3 text-center">ДЗ</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {reportData.attendance.list.slice(0, 15).map((att: any, idx: number) => (
-                          <tr key={idx} className="bg-white even:bg-slate-50/50">
-                            <td className="py-2.5 px-3 font-medium">{new Date(att.date).toLocaleDateString('ru-RU')}</td>
-                            <td className="py-2.5 px-3 truncate max-w-[110px] text-slate-700">{att.subject_name}</td>
-                            <td className="py-2.5 px-3 text-center">
-                              {att.status === 'present' 
-                                ? <span className="inline-block w-4 h-4 rounded bg-emerald-100 text-emerald-700 font-bold leading-4">+</span>
-                                : <span className="inline-block w-4 h-4 rounded bg-red-100 text-red-700 font-bold leading-4">-</span>}
-                            </td>
-                            <td className="py-2.5 px-3 text-center">
-                              {att.homework === 'done' 
-                                ? <span className="inline-block w-4 h-4 rounded bg-emerald-100 text-emerald-700 font-bold leading-4">+</span>
-                                : att.homework === 'not_done' 
-                                  ? <span className="inline-block w-4 h-4 rounded bg-red-100 text-red-700 font-bold leading-4">-</span>
-                                  : <span className="text-slate-300">—</span>}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  {reportData.attendance.list.length > 15 && (
-                    <p className="text-[10px] text-slate-400 mt-2 italic">* Показаны только первые 15 занятий в месяце</p>
-                  )}
-                </div>
+            <ScrollArea className="flex-1">
+              <div className="p-8 max-w-4xl mx-auto space-y-8">
                 
-                {/* TEACHER FEEDBACK */}
+                {/* Stats Grid */}
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="p-4 rounded-xl border border-gray-100 bg-white shadow-sm flex flex-col justify-center">
+                    <div className="text-sm text-gray-500 mb-1 flex items-center gap-1.5">
+                      <Calendar className="h-4 w-4 text-blue-500" /> Посещаемость
+                    </div>
+                    <div className="text-2xl font-semibold text-gray-900">{reportData?.attendance?.rate || 0}%</div>
+                    <div className="text-xs text-gray-400 mt-1">{reportData?.attendance?.present} из {reportData?.attendance?.total} занятий</div>
+                  </div>
+                  <div className="p-4 rounded-xl border border-gray-100 bg-white shadow-sm flex flex-col justify-center">
+                    <div className="text-sm text-gray-500 mb-1 flex items-center gap-1.5">
+                      <FileText className="h-4 w-4 text-orange-500" /> ДЗ
+                    </div>
+                    <div className="text-2xl font-semibold text-gray-900">{reportData?.homework?.rate || 0}%</div>
+                    <div className="text-xs text-gray-400 mt-1">{reportData?.homework?.done} из {reportData?.homework?.total} сдано</div>
+                  </div>
+                  <div className="p-4 rounded-xl border border-gray-100 bg-white shadow-sm flex flex-col justify-center">
+                    <div className="text-sm text-gray-500 mb-1 flex items-center gap-1.5">
+                      <TrendingUp className="h-4 w-4 text-green-500" /> Средний ЕНТ
+                    </div>
+                    <div className="text-2xl font-semibold text-gray-900">{reportData?.ent?.current || 0}</div>
+                    <div className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                      {reportData?.ent?.current > reportData?.ent?.prev ? (
+                        <span className="text-green-600 flex items-center">+{reportData?.ent?.current - reportData?.ent?.prev} с прош. мес.</span>
+                      ) : reportData?.ent?.current < reportData?.ent?.prev ? (
+                        <span className="text-red-500 flex items-center">{reportData?.ent?.current - reportData?.ent?.prev} с прош. мес.</span>
+                      ) : <span>Без изменений</span>}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Teacher Feedback (Mini-chat UI) */}
                 <div>
-                  <h3 className="font-bold text-slate-800 pb-2 mb-4 uppercase tracking-widest text-xs flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-purple-500 inline-block"></span>
-                    Отзывы преподавателей
-                  </h3>
-                  <div className="space-y-3">
-                    {reportData.feedback.length === 0 ? (
-                      <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 text-center">
-                        <p className="text-xs text-slate-500 italic">Преподаватели пока не оставили отзывов за этот месяц.</p>
-                      </div>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-gray-900">Комментарии преподавателей</h3>
+                  </div>
+                  <div className="bg-gray-50/50 rounded-xl border border-gray-100 p-5 space-y-4">
+                    {reportData?.feedback?.length === 0 ? (
+                      <div className="text-sm text-gray-400 text-center py-4">Нет отзывов за этот месяц</div>
                     ) : (
-                      reportData.feedback.slice(0, 4).map((fb: any, idx: number) => (
-                        <div key={idx} className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm relative">
-                          <div className="absolute top-3 left-0 w-1 h-8 bg-indigo-500 rounded-r"></div>
-                          <p className="font-bold text-slate-800 text-[11px] uppercase tracking-wider mb-1 pl-2">
-                            {fb.subject_name} 
-                            <span className="font-normal text-slate-500 normal-case ml-1">({fb.teacher_name})</span>
-                          </p>
-                          <p className="text-slate-700 text-xs leading-relaxed pl-2">{fb.comment}</p>
+                      reportData?.feedback?.map((fb: any) => (
+                        <div key={fb.id} className="flex gap-3">
+                          <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                            <span className="text-blue-700 text-xs font-bold">{fb.teacher_name?.charAt(0)}</span>
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-medium text-gray-900 text-sm">{fb.teacher_name}</span>
+                              <span className="text-xs text-gray-400">{fb.subject_name || 'Общее'}</span>
+                            </div>
+                            <div className="text-sm text-gray-700 bg-white border border-gray-100 p-3 rounded-xl rounded-tl-none shadow-sm inline-block">
+                              {fb.comment || <span className="text-gray-400 italic">Ожидает отзыва...</span>}
+                            </div>
+                          </div>
                         </div>
                       ))
                     )}
                   </div>
                 </div>
-              </div>
 
-              {/* OUTCOMES / RECOMMENDATIONS */}
-              <div style={{ pageBreakInside: 'avoid' }} className="mt-8 relative">
-                <h3 className="font-bold text-slate-800 pb-2 mb-4 uppercase tracking-widest text-xs flex items-center gap-2">
-                   <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
-                   Итоги собрания и рекомендации
-                </h3>
-                <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-md min-h-[120px] relative overflow-hidden">
-                  <div className="absolute right-0 top-0 w-32 h-32 bg-white opacity-5 rounded-full -mr-10 -mt-10"></div>
-                  <p className="text-slate-100 whitespace-pre-wrap leading-relaxed text-sm relative z-10">
-                    {outcomes || "Комментарии по итогам собрания отсутствуют."}
-                  </p>
+                {/* AI Summary for Parents */}
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-gray-900">AI-Сводка отзывов (для родителя)</h3>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-7 text-xs text-purple-600 hover:text-purple-700 hover:bg-purple-50 px-2"
+                      onClick={handleTeacherAiAction}
+                      disabled={generatingTeacherAi}
+                    >
+                      {generatingTeacherAi ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <Sparkles className="h-3 w-3 mr-1.5" />}
+                      Сгенерировать
+                    </Button>
+                  </div>
+                  <Textarea
+                    placeholder="Здесь будет красивая сводка от преподавателей для отправки родителю..."
+                    className="min-h-[100px] resize-y bg-white border-gray-200 shadow-sm text-sm p-4 rounded-xl focus-visible:ring-primary/20"
+                    value={teacherSummary}
+                    onChange={e => setTeacherSummary(e.target.value)}
+                  />
                 </div>
-              </div>
 
-              {/* FOOTER */}
-              <div className="mt-12 pt-4 border-t border-slate-200 flex justify-between items-center text-[10px] text-slate-400 font-medium tracking-wider uppercase">
-                <p>Сгенерировано автоматически системой TODAY UBT</p>
-                <p>Дата формирования: {new Date().toLocaleDateString('ru-RU')}</p>
+                {/* Meeting Outcomes */}
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-gray-900">Итоги собрания (куратор)</h3>
+                    <div className="flex items-center gap-2">
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="h-7 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50 px-2"
+                        onClick={() => handleAiAction('generate')}
+                        disabled={generatingAi}
+                      >
+                        {generatingAi ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <Wand2 className="h-3 w-3 mr-1.5" />}
+                        Сгенерировать с нуля
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="h-7 text-xs text-purple-600 hover:text-purple-700 hover:bg-purple-50 px-2"
+                        onClick={() => handleAiAction('improve')}
+                        disabled={generatingAi || !outcomes}
+                      >
+                        {generatingAi ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <Sparkles className="h-3 w-3 mr-1.5" />}
+                        Улучшить текст
+                      </Button>
+                    </div>
+                  </div>
+                  <Textarea
+                    placeholder="Напишите итоги месяца, договоренности с учеником и рекомендации..."
+                    className="min-h-[180px] resize-y bg-white border-gray-200 shadow-sm text-sm p-4 rounded-xl focus-visible:ring-primary/20"
+                    value={outcomes}
+                    onChange={e => setOutcomes(e.target.value)}
+                  />
+                </div>
+                
+                <div className="h-8" /> {/* Spacer */}
               </div>
-
-            </div>
-          </div>
+            </ScrollArea>
+          </>
         )}
       </div>
+
+      {/* 3. Правая колонка: Контекст и История */}
+      <div className="w-1/4 min-w-[280px] max-w-[320px] bg-gray-50 border-l border-gray-200 flex flex-col h-full">
+        <Tabs defaultValue="history" className="flex flex-col h-full w-full">
+          <div className="px-4 py-3 border-b border-gray-200 bg-white shrink-0">
+            <TabsList className="w-full grid grid-cols-2 h-8">
+              <TabsTrigger value="history" className="text-xs">История</TabsTrigger>
+              <TabsTrigger value="info" className="text-xs">Контекст</TabsTrigger>
+            </TabsList>
+          </div>
+          
+          <TabsContent value="history" className="flex-1 m-0 overflow-hidden flex flex-col">
+            <ScrollArea className="flex-1">
+              <div className="p-4">
+                {!selectedStudentId ? (
+                  <div className="text-xs text-gray-400 text-center mt-10">Ученик не выбран</div>
+                ) : loadingHistory ? (
+                  <div className="flex justify-center py-10"><Loader2 className="h-5 w-5 text-gray-400 animate-spin" /></div>
+                ) : historyData.length === 0 ? (
+                  <div className="text-xs text-gray-400 text-center mt-10 flex flex-col items-center">
+                    <AlertCircle className="h-6 w-6 mb-2 text-gray-300" />
+                    Ранее отчетов не было
+                  </div>
+                ) : (
+                  <Accordion type="multiple" className="space-y-2">
+                    {historyData.map((hist) => (
+                      <AccordionItem key={hist.month} value={hist.month} className="border border-gray-200 bg-white rounded-lg shadow-sm overflow-hidden px-3">
+                        <AccordionTrigger className="py-3 hover:no-underline flex justify-between">
+                          <span className="text-sm font-medium text-gray-900">{hist.month}</span>
+                        </AccordionTrigger>
+                        <AccordionContent className="text-xs text-gray-600 pb-3 space-y-3">
+                          
+                          {/* Если есть сохраненные детальные метрики */}
+                          {hist.stats_json && (() => {
+                            try {
+                              const stats = JSON.parse(hist.stats_json);
+                              return (
+                                <div className="grid grid-cols-2 gap-2 mb-3 bg-gray-50/50 p-2 rounded border border-gray-100">
+                                  <div><span className="text-gray-400">Посещаемость:</span> <span className="font-semibold text-gray-800">{stats.attendance?.rate || 0}%</span></div>
+                                  <div><span className="text-gray-400">ДЗ:</span> <span className="font-semibold text-gray-800">{stats.homework?.rate || 0}%</span></div>
+                                  <div className="col-span-2"><span className="text-gray-400">ЕНТ:</span> <span className="font-semibold text-gray-800">{stats.ent?.current || 0}</span></div>
+                                </div>
+                              );
+                            } catch { return null; }
+                          })()}
+
+                          {hist.teacher_summary && (
+                            <div>
+                              <div className="font-semibold text-gray-800 mb-1">Сводка учителей:</div>
+                              <div className="bg-gray-50 p-2 rounded whitespace-pre-wrap">{hist.teacher_summary}</div>
+                            </div>
+                          )}
+                          {hist.summary && (
+                            <div>
+                              <div className="font-semibold text-gray-800 mb-1">Итоги:</div>
+                              <div className="bg-gray-50 p-2 rounded whitespace-pre-wrap">{hist.summary}</div>
+                            </div>
+                          )}
+                          {!hist.summary && !hist.teacher_summary && (
+                            <div className="text-gray-400 italic">Пустой отчет</div>
+                          )}
+                          <div className="pt-2">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              className="w-full text-xs" 
+                              onClick={() => setSelectedMonth(hist.month)}
+                            >
+                              Перейти к отчету за {hist.month}
+                            </Button>
+                          </div>
+                        </AccordionContent>
+                      </AccordionItem>
+                    ))}
+                  </Accordion>
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+          
+          <TabsContent value="info" className="flex-1 m-0 overflow-hidden">
+             <ScrollArea className="h-full p-4">
+                {selectedStudentObj ? (
+                  <div className="space-y-4 text-sm">
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Родитель</div>
+                      <div className="font-medium">{selectedStudentObj.parent_name || 'Не указан'}</div>
+                      <div className="text-gray-600">{selectedStudentObj.parent_phone || 'Нет телефона'}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Ученик</div>
+                      <div className="font-medium">{selectedStudentObj.phone || 'Нет телефона'}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Заметки (CRM)</div>
+                      <div className="text-gray-600 bg-white p-2 border border-gray-100 rounded-lg text-xs min-h-[60px]">
+                        {selectedStudentObj.notes || 'Нет заметок...'}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-400 text-center mt-10">Ученик не выбран</div>
+                )}
+             </ScrollArea>
+          </TabsContent>
+        </Tabs>
+      </div>
+
+      {/* Скрытый компонент для рендера PDF — overflow:hidden clip */}
+      <div style={{ overflow: 'hidden', height: 0, width: 0 }}>
+        <div ref={pdfRef} style={{ width: '794px' }}>
+          <ReportPDFTemplate 
+            studentName={selectedStudentObj?.full_name || ''}
+            groupName={groups.find(g => String(g.id) === selectedGroupId)?.name || ''}
+            monthLabel={availableMonths.find(m => m.value === selectedMonth)?.label || selectedMonth}
+            attendance={reportData?.attendance || { rate: 0, present: 0, total: 0, list: [] }}
+            homework={reportData?.homework || { rate: 0, done: 0, total: 0 }}
+            ent={reportData?.ent || { current: 0, prev: 0, list: [] }}
+            outcomes={outcomes}
+            teacherSummary={teacherSummary}
+          />
+        </div>
+      </div>
+
     </div>
   );
 }

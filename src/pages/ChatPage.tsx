@@ -65,7 +65,8 @@ export default function ChatPage() {
       wsRef.current = ws;
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ type: 'auth', userId: user!.id }));
+        const token = localStorage.getItem("token");
+        ws.send(JSON.stringify({ type: 'auth', token, userId: user!.id }));
       };
 
       ws.onmessage = (event) => {

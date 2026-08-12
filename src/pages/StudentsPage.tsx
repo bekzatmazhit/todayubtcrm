@@ -12,7 +12,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Label } from "@/components/ui/label";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { fetchStudentsPaginated, fetchGroups, fetchTeacherFeedbackByStudent, fetchLessonCommentsByStudent, bulkArchiveStudents, bulkImportStudents, addStudent } from "@/lib/api";
+import { fetchStudentsPaginated, fetchTeacherFeedbackByStudent, fetchLessonCommentsByStudent, bulkArchiveStudents, bulkImportStudents, addStudent } from "@/lib/api";
+import { useGroups } from "@/hooks/useGroups";
 import { useToast } from "@/hooks/use-toast";
 import { UserAvatar } from "@/components/UserAvatar";
 import { useAuth } from "@/contexts/AuthContext";
@@ -570,12 +571,14 @@ function EmptyState({ text }: { text: string }) {
 export default function StudentsPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { data: groupsData } = useGroups();
   const [searchParams, setSearchParams] = useSearchParams();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState("");
   const [selectedGroup, setSelectedGroup] = useState<string>("all");
   const [students, setStudents] = useState<Student[]>([]);
-  const [groups, setGroups] = useState<Group[]>([]);
+  const [groups, setGroupsState] = useState<any[]>([]);
+  const groupsToUse = groupsData || groups;
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("full_name");
@@ -589,6 +592,17 @@ export default function StudentsPage() {
   const [statusFilter, setStatusFilter] = useState<string>("active");
   const [attFilter, setAttFilter] = useState<string>("all");
   const [entFilter, setEntFilter] = useState<string>("all");
+
+  const hasFilters = search !== "" || selectedGroup !== "all" || statusFilter !== "active" || attFilter !== "all" || entFilter !== "all";
+  const clearFilters = () => {
+    setSearch("");
+    setDebouncedSearch("");
+    setSelectedGroup("all");
+    setStatusFilter("active");
+    setAttFilter("all");
+    setEntFilter("all");
+    setPage(0);
+  };
 
   // 360 Panel state
   const [panelOpen, setPanelOpen] = useState(false);
@@ -629,10 +643,6 @@ export default function StudentsPage() {
       setRefresh(r => r + 1);
     } catch (e: any) { toast({ title: "Ошибка", description: e.message, variant: "destructive" }); }
   };
-
-  useEffect(() => {
-    fetchGroups().then(setGroups).catch(() => {});
-  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
@@ -788,7 +798,7 @@ export default function StudentsPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Все группы</SelectItem>
-              {groups.map((group) => (
+              {groupsToUse.map((group) => (
                 <SelectItem key={group.id} value={group.id.toString()}>
                   <span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={group.name} avatarUrl={group.avatar_url} size={18} showTooltip={false} />{group.name}</span>
                 </SelectItem>
@@ -835,6 +845,12 @@ export default function StudentsPage() {
               <SelectItem value="low">Низкий (&lt; 90, посл. срез)</SelectItem>
             </SelectContent>
           </Select>
+
+          {hasFilters && (
+            <Button variant="ghost" size="sm" onClick={clearFilters} className="h-8 text-xs text-muted-foreground hover:text-foreground">
+              Сбросить фильтры
+            </Button>
+          )}
         </div>
       </div>
 
@@ -987,7 +1003,11 @@ export default function StudentsPage() {
             <div><Label>Группа</Label>
               <Select value={newStudent.group_id} onValueChange={v => setNewStudent({...newStudent, group_id: v})}>
                 <SelectTrigger><SelectValue placeholder="Выберите группу" /></SelectTrigger>
-                <SelectContent>{groups.map(g => <SelectItem key={g.id} value={g.id.toString()}>{g.name}</SelectItem>)}</SelectContent>
+                <SelectContent>
+                  {groupsToUse.map(g => (
+                    <SelectItem key={g.id} value={g.id.toString()}>{g.name}</SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
             <div><Label>ФИО родителя</Label><Input value={newStudent.parent_name} onChange={e => setNewStudent({...newStudent, parent_name: e.target.value})} /></div>

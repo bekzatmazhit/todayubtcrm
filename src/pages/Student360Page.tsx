@@ -30,13 +30,32 @@ import { ParentReportModal } from "@/components/ParentReportModal";
    ═══════════════════════════════════════════════════════════════════════════ */
 const fetchStudent360 = async (id: string, start?: string, end?: string) => {
   const token = localStorage.getItem("token");
-  let url = `/api/student-360/${id}`;
-  if (start && end) url += `?start=${start}&end=${end}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) throw new Error("Failed");
-  return res.json();
+  const headers = { Authorization: `Bearer ${token}` };
+  
+  let q = "";
+  if (start && end) q = `?start=${start}&end=${end}`;
+
+  // Fetch from 4 modular endpoints in parallel
+  const [overviewRes, attRes, entRes, activityRes] = await Promise.all([
+    fetch(`/api/student-360/${id}/overview`, { headers }),
+    fetch(`/api/student-360/${id}/attendance${q}`, { headers }),
+    fetch(`/api/student-360/${id}/ent`, { headers }), // ENT usually ignores date filters for overview
+    fetch(`/api/student-360/${id}/activity`, { headers })
+  ]);
+
+  if (!overviewRes.ok) throw new Error("Failed to load student overview");
+
+  const overview = await overviewRes.json();
+  const attendance = attRes.ok ? await attRes.json() : null;
+  const ent = entRes.ok ? await entRes.json() : null;
+  const activity = activityRes.ok ? await activityRes.json() : null;
+
+  return {
+    ...overview,
+    attendance: attendance || { byMonth: [], bySubject: [], records: [] },
+    ent: ent || { byMonth: [], bySubject: [], groupBenchmark: [], lastMonth: null, entCertificates: [] },
+    ...activity // spreads teacherFeedback, parentFeedback, callHistory, curatorLogs, quizzes
+  };
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════

@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import bcrypt from "bcryptjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = path.join(__dirname, "database.sqlite");
@@ -615,11 +616,14 @@ export function initializeDatabase() {
       student_id INTEGER NOT NULL,
       month TEXT NOT NULL,
       summary TEXT,
+      teacher_summary TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(student_id, month)
     )
   `);
+  try { db.exec(`ALTER TABLE student_monthly_reports ADD COLUMN teacher_summary TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE student_monthly_reports ADD COLUMN stats_json TEXT`); } catch {}
 
   // Schedule share tokens (for public schedule links)
   db.exec(`
@@ -661,6 +665,14 @@ export function initializeDatabase() {
       FOREIGN KEY(permission_id) REFERENCES permissions(id) ON DELETE CASCADE,
       UNIQUE(role_id, permission_id)
     );
+  `);
+
+  // Performance Indexes
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance(student_id);
+    CREATE INDEX IF NOT EXISTS idx_attendance_lesson ON attendance(lesson_id);
+    CREATE INDEX IF NOT EXISTS idx_ent_student_month ON ent_results(student_id, month);
+    CREATE INDEX IF NOT EXISTS idx_lessons_schedule_date ON lessons(schedule_id, date);
   `);
 
   // Seed permissions
@@ -756,37 +768,29 @@ export function initializeDatabase() {
     console.log("\u2705 Time slots seeded");
   }
 
+  // Users Seeding
+  if (db.prepare("SELECT COUNT(*) as c FROM users").get().c === 0) {
+    const userInsert = db.prepare("INSERT INTO users (name, surname, email, phone, password, role_id) VALUES (?, ?, ?, ?, ?, ?)");
+    const hash = (pwd) => bcrypt.hashSync(pwd, 10);
+    [
+      { n: "Admin", s: "System", e: "admin@today.kz", p: "+77000000000", pwd: hash("admin123"), r: 1 },
+      { n: "Head", s: "UMO", e: "umo@today.kz", p: "+77000000001", pwd: hash("umo123"), r: 2 },
+      { n: "Teacher", s: "One", e: "teacher1@today.kz", p: "+77000000002", pwd: hash("teacher123"), r: 3 },
+      { n: "Teacher", s: "Two", e: "teacher2@today.kz", p: "+77000000003", pwd: hash("teacher123"), r: 3 }
+    ].forEach(u => userInsert.run(u.n, u.s, u.e, u.p, u.pwd, u.r));
+    console.log("✅ Default users seeded");
+  }
+
   // === LOAD CSV DATA ===
-  loadCSV("users", "../database_today - users.csv");
   loadCSV("subjects", "../database_today - subjects .csv");
   loadCSV("groups", "../database_today - groups .csv");
   loadCSV("students", "../database_today - students .csv");
   loadCSV("schedule", "../database_today - schedule .csv");
 
   generateEmails();
-  ensureDemoAccounts();
 
   console.log("✅ Database initialized");
   printCredentials();
-}
-
-function ensureDemoAccounts() {
-  const existing = db.prepare("SELECT email FROM users WHERE email IN (?, ?, ?)").all(
-    "admin@today.edu",
-    "head@today.edu",
-    "teacher@today.edu",
-  ).map((u) => u.email);
-
-  const insert = db.prepare("INSERT OR IGNORE INTO users (name, surname, phone, email, password, role_id) VALUES (?, ?, ?, ?, ?, ?)");
-  if (!existing.includes("admin@today.edu")) {
-    insert.run("Admin", "Today", null, "admin@today.edu", "admin123", 1);
-  }
-  if (!existing.includes("head@today.edu")) {
-    insert.run("Head", "Today", null, "head@today.edu", "head123", 2);
-  }
-  if (!existing.includes("teacher@today.edu")) {
-    insert.run("Teacher", "Today", null, "teacher@today.edu", "teacher123", 3);
-  }
 }
 
 // === CSV LOADING ===

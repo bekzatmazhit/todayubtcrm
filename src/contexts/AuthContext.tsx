@@ -9,6 +9,7 @@ export interface User {
   role: UserRole;
   avatar_url?: string;
   permissions?: string[];
+  token?: string;
 }
 
 interface AuthContextType {
@@ -69,6 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         full_name: userData.full_name,
         role: userData.role as UserRole,
         avatar_url: userData.avatar_url || undefined,
+        token: userData.token,
       };
 
       setUser(user);
@@ -94,11 +96,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem("today_crm_user");
   }, []);
 
-  // Глобальный интерцептор fetch: авто-логаут при 401
+  // Глобальный интерцептор fetch: добавляет токен и делает авто-логаут при 401
   useEffect(() => {
     const origFetch = window.fetch.bind(window);
     window.fetch = async (...args) => {
+      let [resource, config] = args;
+      const url = typeof resource === 'string' ? resource : resource instanceof Request ? resource.url : '';
+      
+      // Добавляем токен для API запросов (кроме логина/паролей)
+      if (url.includes('/api/') && !url.includes('/api/login') && !url.includes('/api/password-reset')) {
+        const stored = localStorage.getItem("today_crm_user");
+        if (stored) {
+          try {
+            const parsedUser = JSON.parse(stored);
+            if (parsedUser.token) {
+              if (resource instanceof Request) {
+                resource.headers.set('Authorization', `Bearer ${parsedUser.token}`);
+              } else {
+                config = config || {};
+                config.headers = {
+                  ...config.headers,
+                  'Authorization': `Bearer ${parsedUser.token}`
+                };
+                args[1] = config;
+              }
+            }
+          } catch(e) {}
+        }
+      }
+
       const response = await origFetch(...args);
+      
       if (response.status === 401) {
         // Сбрасываем сессию без повторного запроса на /api/logout
         setUser(null);

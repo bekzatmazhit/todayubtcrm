@@ -15,6 +15,7 @@ import { PwaInstallPrompt } from "@/components/PwaInstallPrompt";
 import { Command } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { GlobalBreadcrumbs } from "@/components/GlobalBreadcrumbs";
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
@@ -33,6 +34,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
           <header className="h-12 md:h-14 flex items-center border-b border-border px-3 md:px-4 bg-card shrink-0">
             <SidebarTrigger className="mr-2 md:mr-4" />
+            <GlobalBreadcrumbs />
             <div className="flex-1" />
             <div className="flex items-center gap-1.5 md:gap-3">
               <Tooltip>
@@ -52,7 +54,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
           </header>
           <AdminBanner />
-          <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 p-3 md:p-6 pb-20 md:pb-6" style={{ overscrollBehavior: 'contain' }}>
+          <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 p-4 md:p-6 pb-24 md:pb-6" style={{ overscrollBehavior: 'contain' }}>
             {children}
           </main>
         </div>
