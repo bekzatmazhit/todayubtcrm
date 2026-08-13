@@ -1,6 +1,6 @@
 import express from "express";
 import { db } from "../db.js";
-import { logAction, generateLessonDates } from "../utils.js";
+import { logAction, generateLessonDates, checkConflicts } from "../utils.js";
 import crypto from "crypto";
 
 const router = express.Router();
