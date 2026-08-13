@@ -644,7 +644,41 @@ ${getPrintWatermarkStyles()}</style></head><body>
       <div className="flex-1 min-w-0 transition-all duration-300">
       {/* Header */}
       <div className="sticky top-0 z-20 bg-background/90 backdrop-blur-md border-b border-border pb-3 md:pb-4 mb-4 md:mb-6">
-        <div className="flex items-center justify-end gap-3 md:gap-4">
+        <div className="flex items-center justify-between gap-3 md:gap-4">
+        {!showConstructor && (
+          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
+            {(["day", "week", "month"] as ViewMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                className={`px-3 py-1.5 text-sm rounded-md font-medium transition-all capitalize ${
+                  viewMode === mode ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {t(mode)}
+              </button>
+            ))}
+          </div>
+          {user?.role === "admin" && viewMode === "day" && !showConstructor && !isMobile && (
+            <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
+              <button
+                onClick={() => setScheduleViewMode("teachers")}
+                className={`px-2 py-1 text-[11px] md:text-xs rounded-md font-medium transition-all ${
+                  scheduleViewMode === "teachers" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >{t("По учителям")}</button>
+              <button
+                onClick={() => setScheduleViewMode("groups")}
+                className={`px-2 py-1 text-[11px] md:text-xs rounded-md font-medium transition-all ${
+                  scheduleViewMode === "groups" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >{t("По группам")}</button>
+            </div>
+          )}
+        </div>
+        )}
+        <div className="flex items-center gap-3 md:gap-4">
           <div className="flex items-center gap-1">
             <Button variant="outline" size="sm" className="h-7 md:h-8 text-xs" onClick={goToToday}>{t("Today")}</Button>
             <Button variant="outline" size="sm" className="h-7 md:h-8 text-xs" onClick={goToTomorrow}>{t("Tomorrow")}</Button>
@@ -708,6 +742,7 @@ ${getPrintWatermarkStyles()}</style></head><body>
             </TooltipProvider>
           </div>
         </div>
+        </div>
       </div>
 
       <>
@@ -719,38 +754,7 @@ ${getPrintWatermarkStyles()}</style></head><body>
       <>
 
       {/* View controls + navigation */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
-            {(["day", "week", "month"] as ViewMode[]).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setViewMode(mode)}
-                className={`px-3 py-1.5 text-sm rounded-md font-medium transition-all capitalize ${
-                  viewMode === mode ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {t(mode)}
-              </button>
-            ))}
-          </div>
-          {user?.role === "admin" && viewMode === "day" && !showConstructor && !isMobile && (
-            <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
-              <button
-                onClick={() => setScheduleViewMode("teachers")}
-                className={`px-2 py-1 text-[11px] md:text-xs rounded-md font-medium transition-all ${
-                  scheduleViewMode === "teachers" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >{t("По учителям")}</button>
-              <button
-                onClick={() => setScheduleViewMode("groups")}
-                className={`px-2 py-1 text-[11px] md:text-xs rounded-md font-medium transition-all ${
-                  scheduleViewMode === "groups" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >{t("По группам")}</button>
-            </div>
-          )}
-        </div>
+      <div className="flex items-center justify-end mb-4">
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="icon" onClick={() => navigateDate(-1)}>
             <ChevronLeft className="h-4 w-4" />

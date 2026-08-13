@@ -1,4 +1,3 @@
-import React from "react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { useTranslation } from "react-i18next";
@@ -137,8 +136,137 @@ function SearchBar({ value, onChange, placeholder }: { value: string; onChange: 
   );
 }
 
+// 
+//  USERS (USTAZY) SECTION
+// 
+
+const ROLES = ["teacher", "umo_head", "admin"];
+const ROLE_LABELS: Record<string, string> = { teacher: "Устаз", umo_head: "УМО", admin: "Админ" };
+
+type UserForm = { name: string; surname: string; phone: string; email: string; role: string; avatar_url: string };
+const emptyUser = (): UserForm => ({ name: "", surname: "", phone: "", email: "", role: "teacher", avatar_url: "" });
 
 
-function PermissionsTab({ toast }
+function PermissionsTab({ toast }: { toast: any }) {
+  const [roles, setRoles] = useState<any[]>([]);
+  const [permissions, setPermissions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<number | null>(null);
+  const [editState, setEditState] = useState<Record<number, Set<number>>>({});
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [r, p] = await Promise.all([fetchRolesWithPermissions(), fetchPermissions()]);
+      setRoles(r);
+      setPermissions(p);
+      const state: Record<number, Set<number>> = {};
+      for (const role of r) {
+        state[role.id] = new Set(role.permissions.map((p: any) => p.permission_id));
+      }
+      setEditState(state);
+    } catch {} finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const toggle = (roleId: number, permId: number) => {
+    setEditState(prev => {
+      const next = { ...prev };
+      const set = new Set(next[roleId] || []);
+      if (set.has(permId)) set.delete(permId); else set.add(permId);
+      next[roleId] = set;
+      return next;
+    });
+  };
+
+  const save = async (roleId: number) => {
+    setSaving(roleId);
+    try {
+      await updateRolePermissions(roleId, [...(editState[roleId] || [])]);
+      toast({ title: "Права обновлены" });
+      load();
+    } catch {
+      toast({ title: "Ошибка", variant: "destructive" });
+    } finally { setSaving(null); }
+  };
+
+  const roleLabelMap: Record<string, string> = {
+    admin: "Админ",
+    umo_head: "Завуч (УМО)",
+    teacher: "Преподаватель",
+  };
+
+  const roleColorMap: Record<string, string> = {
+    admin: "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
+    umo_head: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+    teacher: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
+  };
+
+  if (loading) return <div className="space-y-3">{Array.from({length: 5}).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-3 mb-4">
+        <Shield className="h-5 w-5 text-primary" />
+        <h3 className="text-lg font-semibold">Управление правами доступа</h3>
+      </div>
+      <p className="text-sm text-muted-foreground">
+        Настройте, какие действия доступны для каждой роли. Изменения вступают в силу при следующем входе пользователя.
+      </p>
+
+      <div className="border rounded-lg overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b bg-muted/40">
+              <th className="text-left p-3 font-medium min-w-[200px]">Разрешение</th>
+              {roles.map(role => (
+                <th key={role.id} className="text-center p-3 font-medium min-w-[120px]">
+                  <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${roleColorMap[role.name] || ''}`}>
+                    {roleLabelMap[role.name] || role.name}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {permissions.map(perm => (
+              <tr key={perm.id} className="border-b hover:bg-muted/30 transition-colors">
+                <td className="p-3">
+                  <div>
+                    <p className="font-medium text-sm">{perm.name}</p>
+                    <p className="text-xs text-muted-foreground">{perm.description}</p>
+                  </div>
+                </td>
+                {roles.map(role => (
+                  <td key={role.id} className="text-center p-3">
+                    <Checkbox
+                      checked={editState[role.id]?.has(perm.id) || false}
+                      onCheckedChange={() => toggle(role.id, perm.id)}
+                      disabled={role.name === 'admin' && perm.key === 'manage_permissions'}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex gap-2 justify-end">
+        {roles.map(role => (
+          <Button
+            key={role.id}
+            size="sm"
+            onClick={() => save(role.id)}
+            disabled={saving !== null}
+          >
+            {saving === role.id ? "Сохранение..." : `Сохранить ${roleLabelMap[role.name] || role.name}`}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default PermissionsTab;

@@ -24,3 +24,6 @@ node_modules
 # SQLite transient files
 *.sqlite-wal
 *.sqlite-shm
+
+# Env files
+.env

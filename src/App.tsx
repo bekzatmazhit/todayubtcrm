@@ -15,7 +15,7 @@ const StudentsPage         = lazy(() => import("@/pages/StudentsPage"));
 const Student360Page       = lazy(() => import("@/pages/Student360Page"));
 const EntResultsPage       = lazy(() => import("@/pages/EntResultsPage"));
 const AdmissionPage        = lazy(() => import("@/pages/AdmissionPage"));
-const CuratorshipPage      = lazy(() => import("@/pages/CuratorshipPage"));
+const CuratorshipPage      = lazy(() => import("@/pages/curatorship/index"));
 const TeamPage             = lazy(() => import("@/pages/TeamPage"));
 const TasksPage            = lazy(() => import("@/pages/TasksPage"));
 const StoragePage          = lazy(() => import("@/pages/StoragePage"));

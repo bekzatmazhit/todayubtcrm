@@ -7,6 +7,7 @@ import {
   type ScheduleEntry,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
@@ -73,6 +74,8 @@ export default function ScheduleConstructor({ onClose }: Props) {
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished] = useState(false);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
 
   // Student picker state (for "Сводная группа" mode)
   const [assignMode, setAssignMode] = useState<"group" | "custom">("group");
@@ -150,14 +153,19 @@ export default function ScheduleConstructor({ onClose }: Props) {
     setModal({ kind: "free-add" });
   };
 
-  const handleClearSchedule = async () => {
-    if (!confirm(`Вы уверены, что хотите полностью очистить расписание для ${cycle === "PSP" ? "ПСП" : "ВЧС"}? Это действие нельзя отменить.`)) return;
+  const handleClearSchedule = () => setConfirmClearOpen(true);
+  
+  const executeClearSchedule = async () => {
+    setIsClearing(true);
     try {
       await clearSchedule(cycle);
       setSchedule(prev => prev.filter(s => s.cycle !== cycle));
       toast.success("Расписание очищено");
     } catch (e: any) {
-      toast.error(e.message || "Ошибка при очистке");
+      toast.error(e.message);
+    } finally {
+      setIsClearing(false);
+      setConfirmClearOpen(false);
     }
   };
 
@@ -825,6 +833,15 @@ export default function ScheduleConstructor({ onClose }: Props) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      
+      <ConfirmDialog
+        open={confirmClearOpen}
+        title="Очистить расписание?"
+        description={`Вы уверены, что хотите полностью очистить расписание для ${cycle === "PSP" ? "ПСП" : "ВЧС"}? Это действие нельзя отменить.`}
+        onConfirm={executeClearSchedule}
+        onCancel={() => setConfirmClearOpen(false)}
+        loading={isClearing}
+      />
     </div>
   );
 }

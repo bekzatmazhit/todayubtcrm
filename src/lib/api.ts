@@ -598,11 +598,12 @@ export async function updateAttendance(studentId: number, lessonId: number, data
 
 // ====================== ENT RESULTS ======================
 
-export async function fetchEntResults(month?: string, groupId?: number) {
+export async function fetchEntResults(month?: string, groupId?: number | string, status?: string) {
   try {
     const params = new URLSearchParams();
     if (month) params.append("month", month);
     if (groupId) params.append("group_id", groupId.toString());
+    if (status) params.append("status", status);
     const res = await fetch(`${API_BASE}/ent-results?${params}`, defaultOptions);
     if (!res.ok) throw new Error("Failed to fetch ENT results");
     return await res.json();

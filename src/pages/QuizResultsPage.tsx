@@ -14,6 +14,8 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchQuizzes, fetchGroups, fetchSubjects, fetchUsers } from "@/lib/api";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
+import { motion } from "framer-motion";
+import { EmptyState } from "@/components/EmptyState";
 
 const MONTHS = [
   { value: "2026-01", label: "Январь 2026" },
@@ -42,7 +44,13 @@ export default function QuizResultsPage() {
   const [groupId, setGroupId] = useState<string>("all");
   const [subjectId, setSubjectId] = useState<string>("all");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
   useEffect(() => {
     Promise.all([
@@ -107,8 +115,8 @@ export default function QuizResultsPage() {
     }
 
     const studentsList = Array.from(studentMap.values());
-    if (search) {
-      const q = search.toLowerCase();
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase();
       return {
         columns: sortedQuizzes,
         rows: studentsList.filter(s => s.name.toLowerCase().includes(q) || (s.group_name && s.group_name.toLowerCase().includes(q)))
@@ -116,7 +124,7 @@ export default function QuizResultsPage() {
     }
 
     return { columns: sortedQuizzes, rows: studentsList };
-  }, [quizzes, search]);
+  }, [quizzes, debouncedSearch]);
 
   const exportToExcel = () => {
     if (tableData.rows.length === 0) return;
@@ -266,14 +274,12 @@ export default function QuizResultsPage() {
             <Skeleton className="h-10 w-full" />
           </div>
         ) : tableData.columns.length === 0 ? (
-          <div className="p-16 flex flex-col items-center justify-center text-center">
-            <div className="h-16 w-16 bg-muted rounded-full flex items-center justify-center mb-4">
-              <ClipboardCheck className="h-8 w-8 text-muted-foreground/50" />
-            </div>
-            <p className="text-lg font-medium text-foreground">Нет данных по тестам</p>
-            <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-              За выбранный период контрольные работы не проводились или результаты еще не внесены.
-            </p>
+          <div className="p-8">
+            <EmptyState 
+              icon={ClipboardCheck} 
+              title="Нет данных за этот период" 
+              description="За выбранный месяц контрольные работы не проводились или не соответствуют фильтрам." 
+            />
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -300,15 +306,21 @@ export default function QuizResultsPage() {
               <TableBody>
                 {tableData.rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={tableData.columns.length + 3} className="h-24 text-center">
-                      Ничего не найдено
+                    <TableCell colSpan={tableData.columns.length + 3} className="h-48 text-center">
+                      <EmptyState icon={Users} title="Ученики не найдены" description="По вашему запросу ничего не найдено." />
                     </TableCell>
                   </TableRow>
                 ) : (
                   tableData.rows.map((row, idx) => {
                     let sum = 0, count = 0;
                     return (
-                      <TableRow key={row.id} className="group hover:bg-muted/30">
+                      <motion.tr 
+                        key={row.id} 
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: idx * 0.05 }}
+                        className="group hover:bg-muted/30 border-b transition-colors data-[state=selected]:bg-muted"
+                      >
                         <TableCell className="text-muted-foreground text-xs">{idx + 1}</TableCell>
                         <TableCell className="sticky left-0 bg-background group-hover:bg-muted/30 z-10 font-medium">
                           <div className="flex items-center gap-2">
@@ -344,7 +356,7 @@ export default function QuizResultsPage() {
                             <span className="text-muted-foreground/50">-</span>
                           )}
                         </TableCell>
-                      </TableRow>
+                      </motion.tr>
                     );
                   })
                 )}

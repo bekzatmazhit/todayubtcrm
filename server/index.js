@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -3640,7 +3641,7 @@ app.put("/api/settings/:key", (req, res) => {
 app.post("/api/ai/generate-report", async (req, res) => {
   try {
     const apiKeyRow = db.prepare("SELECT value FROM settings WHERE key = 'openai_api_key'").get();
-    const apiKey = apiKeyRow?.value;
+    const apiKey = apiKeyRow?.value || process.env.OPENAI_API_KEY;
     if (!apiKey) return res.status(400).json({ error: "OpenAI API Key не настроен в настройках CRM." });
 
     const { action, studentName, month, stats, draft } = req.body;

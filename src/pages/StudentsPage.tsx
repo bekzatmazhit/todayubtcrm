@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Label } from "@/components/ui/label";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { fetchStudentsPaginated, fetchTeacherFeedbackByStudent, fetchLessonCommentsByStudent, bulkArchiveStudents, bulkImportStudents, addStudent } from "@/lib/api";
+import { fetchStudentsPaginated, fetchTeacherFeedbackByStudent, fetchLessonCommentsByStudent, bulkArchiveStudents, bulkImportStudents, createStudent } from "@/lib/api";
 import { useGroups } from "@/hooks/useGroups";
 import { useToast } from "@/hooks/use-toast";
 import { UserAvatar } from "@/components/UserAvatar";
@@ -618,26 +618,23 @@ export default function StudentsPage() {
   const [refresh, setRefresh] = useState(0);
 
   // Modals state
-  const [archiveModalOpen, setArchiveModalOpen] = useState(false);
-  const [gradYear, setGradYear] = useState("");
   const [addStudentModalOpen, setAddStudentModalOpen] = useState(false);
-  const [newStudent, setNewStudent] = useState({ full_name: "", phone: "", parent_name: "", parent_phone: "", group_id: "" });
+  const [newStudent, setNewStudent] = useState({ first_name: "", last_name: "", phone: "", parent_name: "", parent_phone: "", group_id: "" });
   const [importModalOpen, setImportModalOpen] = useState(false);
 
-  const handleBulkArchive = async () => {
-    if (!gradYear) return toast({ title: "Ошибка", description: "Укажите год выпуска" });
+    const handleAddStudent = async () => {
+    if (!newStudent.first_name || !newStudent.last_name) return toast({ title: "Ошибка", description: "Укажите имя и фамилию ученика" });
     try {
-      await bulkArchiveStudents(gradYear);
-      toast({ title: "Успех", description: "Активные ученики переведены в архив" });
-      setArchiveModalOpen(false);
-      setRefresh(r => r + 1);
-    } catch (e: any) { toast({ title: "Ошибка", description: e.message, variant: "destructive" }); }
-  };
-
-  const handleAddStudent = async () => {
-    if (!newStudent.full_name) return toast({ title: "Ошибка", description: "Имя ученика обязательно" });
-    try {
-      await addStudent(newStudent);
+      const full_name = `${newStudent.first_name} ${newStudent.last_name}`.trim();
+      const data = {
+        full_name,
+        phone: newStudent.phone || null,
+        parent_phone: newStudent.parent_phone || null,
+        parent_name: newStudent.parent_name || null,
+        group_id: newStudent.group_id ? parseInt(newStudent.group_id) : null,
+        status: "active"
+      };
+      await createStudent(data);
       toast({ title: "Успех", description: "Ученик добавлен" });
       setAddStudentModalOpen(false);
       setRefresh(r => r + 1);
@@ -775,12 +772,6 @@ export default function StudentsPage() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          {user?.role === "admin" && (
-            <Button variant="outline" size="sm" onClick={() => setArchiveModalOpen(true)} className="gap-2 text-orange-600 border-orange-200 hover:bg-orange-50">
-              <Archive className="h-4 w-4" />
-              Завершить сезон
-            </Button>
-          )}
         </div>
       </div>
 
@@ -973,32 +964,15 @@ export default function StudentsPage() {
       </Sheet>
 
       {/* ── MODALS ── */}
-      {/* Archive Season */}
-      <Dialog open={archiveModalOpen} onOpenChange={setArchiveModalOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Завершить сезон</DialogTitle>
-            <DialogDescription>
-              Все активные ученики будут переведены в архив с указанным годом выпуска.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-4">
-            <Label>Год выпуска (тег архива)</Label>
-            <Input value={gradYear} onChange={e => setGradYear(e.target.value)} placeholder="Например: Выпуск 2026" className="mt-2" />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setArchiveModalOpen(false)}>Отмена</Button>
-            <Button variant="destructive" onClick={handleBulkArchive}>Завершить сезон</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Add Student Manually */}
       <Dialog open={addStudentModalOpen} onOpenChange={setAddStudentModalOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>Добавить ученика</DialogTitle></DialogHeader>
           <div className="grid gap-4 py-4">
-            <div><Label>ФИО</Label><Input value={newStudent.full_name} onChange={e => setNewStudent({...newStudent, full_name: e.target.value})} placeholder="Иванов Иван" /></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><Label>Имя *</Label><Input value={newStudent.first_name} onChange={e => setNewStudent({...newStudent, first_name: e.target.value})} placeholder="Иван" /></div>
+              <div><Label>Фамилия *</Label><Input value={newStudent.last_name} onChange={e => setNewStudent({...newStudent, last_name: e.target.value})} placeholder="Иванов" /></div>
+            </div>
             <div><Label>Телефон</Label><Input value={newStudent.phone} onChange={e => setNewStudent({...newStudent, phone: e.target.value})} placeholder="+7 777 123 4567" /></div>
             <div><Label>Группа</Label>
               <Select value={newStudent.group_id} onValueChange={v => setNewStudent({...newStudent, group_id: v})}>

@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, XCircle, Clock, BookOpen, BookX, BookMarked, Save, UserPlus, X as XIcon, Archive, ClipboardList, CheckCheck } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { CheckCircle2, XCircle, Clock, BookOpen, BookX, BookMarked, Save, UserPlus, X as XIcon, Archive, ClipboardList, CheckCheck, MoreVertical, MapPin, Calendar } from "lucide-react";
 import { Lesson, Student } from "@/data/mockSchedule";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
@@ -41,7 +42,7 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
   const [addMode, setAddMode] = useState<"search" | "new">("search");
   const [allStudents, setAllStudents] = useState<any[]>([]);
   const [addStudentSearch, setAddStudentSearch] = useState("");
-  const [newStudentForm, setNewStudentForm] = useState({ full_name: "", phone: "", parent_name: "", parent_phone: "" });
+  const [newStudentForm, setNewStudentForm] = useState({ first_name: "", last_name: "", phone: "", parent_name: "", parent_phone: "" });
   const [creatingStudent, setCreatingStudent] = useState(false);
 
   useEffect(() => {
@@ -50,7 +51,7 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
       setShowAddStudent(false);
       setAddMode("search");
       setAddStudentSearch("");
-      setNewStudentForm({ full_name: "", phone: "", parent_name: "", parent_phone: "" });
+      setNewStudentForm({ first_name: "", last_name: "", phone: "", parent_name: "", parent_phone: "" });
       setShowQuizPanel(false);
       setQuizTitle("");
       setQuizMaxScore("100");
@@ -98,7 +99,6 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
             });
           }
           setQuizScores(sq);
-          setShowQuizPanel(true);
         }
       } catch (err) {
         console.error("Failed to fetch quizzes", err);
@@ -161,20 +161,21 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
   };
 
   const handleCreateStudent = async () => {
-    if (!newStudentForm.full_name.trim()) return;
+    if (!newStudentForm.first_name.trim() || !newStudentForm.last_name.trim()) return;
     const groupId = (lesson as any).group_id as number | undefined;
     setCreatingStudent(true);
+    const full_name = `${newStudentForm.first_name.trim()} ${newStudentForm.last_name.trim()}`;
     try {
-      const created = await createStudent({ full_name: newStudentForm.full_name.trim(), phone: newStudentForm.phone.trim() || null, parent_name: newStudentForm.parent_name.trim() || null, parent_phone: newStudentForm.parent_phone.trim() || null, group_id: groupId || null, status: "active" });
+      const created = await createStudent({ full_name, phone: newStudentForm.phone.trim() || null, parent_name: newStudentForm.parent_name.trim() || null, parent_phone: newStudentForm.parent_phone.trim() || null, group_id: groupId || null, status: "active" });
       if (created?.id) {
-        setStudents((prev) => [...prev, { id: `s-${created.id}`, full_name: newStudentForm.full_name.trim(), attendance: "present" as const, lateness: "on_time" as const, homework: "done" as const, comment: "" }]);
+        setStudents((prev) => [...prev, { id: `s-${created.id}`, full_name, attendance: "present" as const, lateness: "on_time" as const, homework: "done" as const, comment: "" }]);
         fetchStudents().then(setAllStudents);
-        toast.success(`${newStudentForm.full_name.trim()} добавлен в группу`);
-        setNewStudentForm({ full_name: "", phone: "", parent_name: "", parent_phone: "" });
+        toast.success(`${full_name} добавлен в систему`);
+        setNewStudentForm({ first_name: "", last_name: "", phone: "", parent_name: "", parent_phone: "" });
         setShowAddStudent(false);
       }
     } catch {
-      toast.error("Ошибка создания ученика");
+      toast.error("Ошибка при добавлении ученика");
     } finally {
       setCreatingStudent(false);
     }
@@ -283,19 +284,45 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
                 <ClipboardList className="h-4 w-4 sm:mr-1.5" />
                 <span className="hidden sm:inline">Контрольный тест</span>
               </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 ml-1">
+                    <MoreVertical className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem onClick={() => markAll("present")} className="text-emerald-600 dark:text-emerald-400 focus:bg-emerald-50 dark:focus:bg-emerald-950/30 focus:text-emerald-700">
+                    <CheckCheck className="h-4 w-4 mr-2" />
+                    Все пришли
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => markAll("absent")} className="text-red-600 dark:text-red-400 focus:bg-red-50 dark:focus:bg-red-950/30 focus:text-red-700">
+                    <XCircle className="h-4 w-4 mr-2" />
+                    Все отсутствуют
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => setStudents(prev => prev.map(s => ({ ...s, homework: "done" as const })))} className="text-blue-600 dark:text-blue-400 focus:bg-blue-50 dark:focus:bg-blue-950/30 focus:text-blue-700">
+                    <BookOpen className="h-4 w-4 mr-2" />
+                    ДЗ все сделали
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </DialogHeader>
 
           {/* Badges and Stats row */}
           <div className="flex flex-wrap items-center justify-between gap-4 py-1">
-            <div className="flex flex-wrap gap-2">
-              <Badge variant="default" className="flex items-center gap-1.5">
-                <GroupPersonAvatar groupName={lesson.group_name} avatarUrl={lesson.group_avatar} size={16} showTooltip={false} />
-                {lesson.group_name}
-              </Badge>
-              <Badge variant="secondary">{lesson.subject}</Badge>
-              <Badge variant="outline">{lesson.room}</Badge>
-              <Badge variant="outline">{lesson.time_slot}</Badge>
+            <div className="flex flex-wrap items-center gap-4 bg-muted/30 p-2.5 px-4 rounded-xl border">
+              <div className="flex items-center gap-2 border-r pr-4">
+                <GroupPersonAvatar groupName={lesson.group_name} avatarUrl={lesson.group_avatar} size={24} showTooltip={false} />
+                <div>
+                  <p className="text-sm font-semibold leading-none">{lesson.group_name}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{lesson.subject}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-4 text-xs font-medium text-muted-foreground">
+                <span className="flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" /> {lesson.room}</span>
+                <span className="flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" /> {lesson.time_slot}</span>
+              </div>
             </div>
             
             <div className="flex items-center gap-3 text-sm text-muted-foreground bg-muted/30 px-3 py-1.5 rounded-full border">
@@ -353,14 +380,17 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
                 </>
               ) : (
                 <div className="space-y-2">
-                  <Input value={newStudentForm.full_name} onChange={(e) => setNewStudentForm(f => ({ ...f, full_name: e.target.value }))} placeholder="ФИО ученика *" className="h-8 text-sm" autoFocus />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input value={newStudentForm.first_name} onChange={(e) => setNewStudentForm(f => ({ ...f, first_name: e.target.value }))} placeholder="Имя *" className="h-8 text-sm" autoFocus />
+                    <Input value={newStudentForm.last_name} onChange={(e) => setNewStudentForm(f => ({ ...f, last_name: e.target.value }))} placeholder="Фамилия *" className="h-8 text-sm" />
+                  </div>
                   <div className="grid grid-cols-2 gap-2">
                     <Input value={newStudentForm.phone} onChange={(e) => setNewStudentForm(f => ({ ...f, phone: e.target.value }))} placeholder="Телефон ученика" className="h-8 text-sm" />
                     <Input value={newStudentForm.parent_phone} onChange={(e) => setNewStudentForm(f => ({ ...f, parent_phone: e.target.value }))} placeholder="Телефон родителя" className="h-8 text-sm" />
                   </div>
                   <Input value={newStudentForm.parent_name} onChange={(e) => setNewStudentForm(f => ({ ...f, parent_name: e.target.value }))} placeholder="Имя родителя" className="h-8 text-sm" />
                   <p className="text-xs text-muted-foreground">Ученик будет добавлен в группу <strong>{lesson.group_name}</strong></p>
-                  <Button size="sm" onClick={handleCreateStudent} disabled={!newStudentForm.full_name.trim() || creatingStudent} className="w-full">
+                  <Button size="sm" onClick={handleCreateStudent} disabled={!newStudentForm.first_name.trim() || !newStudentForm.last_name.trim() || creatingStudent} className="w-full">
                     {creatingStudent ? "Создание..." : "Создать и добавить"}
                   </Button>
                 </div>
@@ -462,35 +492,6 @@ export function ClassManagementModal({ lesson, open, onOpenChange, date, onSaved
               </div>
             </div>
           )}
-
-          {/* Bulk attendance buttons */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-muted-foreground font-medium">Быстро:</span>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs gap-1.5 border-emerald-500/50 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
-              onClick={() => markAll("present")}
-            >
-              <CheckCheck className="h-3.5 w-3.5" /> Все пришли
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs gap-1.5 border-red-500/50 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30"
-              onClick={() => markAll("absent")}
-            >
-              <XCircle className="h-3.5 w-3.5" /> Все отсутствуют
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs gap-1.5 border-blue-500/50 text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30"
-              onClick={() => setStudents(prev => prev.map(s => ({ ...s, homework: "done" as const })))}
-            >
-              <BookOpen className="h-3.5 w-3.5" /> ДЗ все сделали
-            </Button>
-          </div>
 
           {/* Student table */}
           <div className="rounded-xl border border-border overflow-hidden">

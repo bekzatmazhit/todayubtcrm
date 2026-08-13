@@ -1,5 +1,6 @@
-import React from "react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { motion } from "framer-motion";
+import { EmptyState } from "@/components/EmptyState";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { useTranslation } from "react-i18next";
 import {
@@ -137,7 +138,38 @@ function SearchBar({ value, onChange, placeholder }: { value: string; onChange: 
   );
 }
 
+// 
+//  USERS (USTAZY) SECTION
+// 
 
+const ROLES = ["teacher", "umo_head", "admin"];
+const ROLE_LABELS: Record<string, string> = { teacher: "Устаз", umo_head: "УМО", admin: "Админ" };
+
+type UserForm = { name: string; surname: string; phone: string; email: string; role: string; avatar_url: string };
+const emptyUser = (): UserForm => ({ name: "", surname: "", phone: "", email: "", role: "teacher", avatar_url: "" });
+
+
+const ACTION_LABELS: Record<string, { label: string; color: string }> = {
+  login: { label: "Вход", color: "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300" },
+  create: { label: "Создание", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  update: { label: "Изменение", color: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" },
+  delete: { label: "Удаление", color: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300" },
+};
+
+const ENTITY_LABELS: Record<string, string> = {
+  user: "Пользователь",
+  student: "Ученик",
+  group: "Группа",
+  subject: "Предмет",
+  schedule: "Расписание",
+  task: "Задача",
+  wiki_category: "Категория Wiki",
+  wiki_article: "Статья Wiki",
+  dynamic_table: "Таблица",
+  banner: "Баннер",
+  broadcast: "Объявление",
+  storage_folder: "Папка",
+};
 
 function AuditTab() {
   const { i18n } = useTranslation();
@@ -235,12 +267,12 @@ function AuditTab() {
                 </tr>
               ))
             ) : logs.length === 0 ? (
-              <tr><td colSpan={6} className="p-8 text-center text-muted-foreground">Нет записей</td></tr>
+              <tr><td colSpan={6} className="p-0 border-b-0"><EmptyState icon={Search} title="Записи не найдены" description="Журнал аудита пуст или записи не найдены." /></td></tr>
             ) : (
-              logs.map(log => {
+              logs.map((log, i) => {
                 const act = ACTION_LABELS[log.action] || { label: log.action, color: "bg-gray-100 text-gray-700" };
                 return (
-                  <tr key={log.id} className="border-b hover:bg-muted/30 transition-colors">
+                  <motion.tr initial={{opacity: 0, y: 5}} animate={{opacity: 1, y: 0}} transition={{delay: i * 0.02}} key={log.id} className="border-b hover:bg-muted/40 transition-colors">
                     <td className="p-2 text-xs whitespace-nowrap text-muted-foreground">{fmtDate(log.created_at)}</td>
                     <td className="p-2 whitespace-nowrap">{log.user_name || "—"}</td>
                     <td className="p-2">
@@ -251,7 +283,7 @@ function AuditTab() {
                     </td>
                     <td className="p-2 max-w-[200px] truncate">{log.entity_name || "—"}</td>
                     <td className="p-2 hidden lg:table-cell text-xs text-muted-foreground font-mono">{log.ip || "—"}</td>
-                  </tr>
+                  </motion.tr>
                 );
               })
             )}
@@ -270,5 +302,7 @@ function AuditTab() {
     </div>
   );
 }
+
+// ====================== PERMISSIONS TAB ======================
 
 export default AuditTab;

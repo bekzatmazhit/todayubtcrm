@@ -1,4 +1,3 @@
-import React from "react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import { useTranslation } from "react-i18next";
@@ -137,7 +136,36 @@ function SearchBar({ value, onChange, placeholder }: { value: string; onChange: 
   );
 }
 
+// 
+//  USERS (USTAZY) SECTION
+// 
 
+const ROLES = ["teacher", "umo_head", "admin"];
+const ROLE_LABELS: Record<string, string> = { teacher: "Устаз", umo_head: "УМО", admin: "Админ" };
+
+type UserForm = { name: string; surname: string; phone: string; email: string; role: string; avatar_url: string };
+const emptyUser = (): UserForm => ({ name: "", surname: "", phone: "", email: "", role: "teacher", avatar_url: "" });
+
+
+function fmtUptime(sec: number) {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const parts = [];
+  if (d) parts.push(`${d}╨┤`);
+  if (h) parts.push(`${h}╤З`);
+  if (m) parts.push(`${m}╨╝`);
+  if (!parts.length) parts.push(`${s}╤Б`);
+  return parts.join(" ");
+}
+
+function fmtBytes(bytes: number) {
+  if (bytes < 1024) return bytes + " ╨С";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " ╨Ъ╨С";
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " ╨Ь╨С";
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " ╨У╨С";
+}
 
 function HealthTab() {
   const [health, setHealth] = useState<any>(null);
@@ -271,5 +299,13 @@ function HealthTab() {
     </div>
   );
 }
+
+/* ====================== BANNERS TAB ====================== */
+
+const BANNER_TYPE_CONFIG: Record<string, { label: string; color: string; icon: typeof Info }> = {
+  info: { label: "Инфо", color: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300", icon: Info },
+  warning: { label: "Внимание", color: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300", icon: AlertTriangle },
+  danger: { label: "Критический", color: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300", icon: AlertCircle },
+};
 
 export default HealthTab;

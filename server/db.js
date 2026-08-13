@@ -111,7 +111,7 @@ export function initializeDatabase() {
       schedule_id INTEGER NOT NULL,
       student_id  INTEGER NOT NULL,
       FOREIGN KEY(schedule_id) REFERENCES schedule(id) ON DELETE CASCADE,
-      FOREIGN KEY(student_id)  REFERENCES students(id),
+      FOREIGN KEY(student_id)  REFERENCES students(id) ON DELETE CASCADE,
       UNIQUE(schedule_id, student_id)
     );
 
@@ -146,8 +146,8 @@ export function initializeDatabase() {
       homework   TEXT DEFAULT 'done',
       comment    TEXT,
       created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY(student_id) REFERENCES students(id),
-      FOREIGN KEY(lesson_id)  REFERENCES lessons(id),
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+      FOREIGN KEY(lesson_id)  REFERENCES lessons(id) ON DELETE CASCADE,
       UNIQUE(student_id, lesson_id)
     );
 
@@ -161,7 +161,7 @@ export function initializeDatabase() {
       score      INTEGER NOT NULL DEFAULT 0,
       month      TEXT NOT NULL,
       created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY(student_id) REFERENCES students(id),
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
       FOREIGN KEY(subject_id) REFERENCES subjects(id),
       UNIQUE(student_id, subject_id, month)
     );
@@ -224,7 +224,7 @@ export function initializeDatabase() {
       notes      TEXT,
       status     TEXT DEFAULT 'needs_callback',
       created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY(student_id) REFERENCES students(id),
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
       FOREIGN KEY(curator_id) REFERENCES users(id)
     );
 
@@ -248,7 +248,7 @@ export function initializeDatabase() {
       completed_at TEXT,
       created_at   TEXT DEFAULT (datetime('now')),
       FOREIGN KEY(curator_id) REFERENCES users(id),
-      FOREIGN KEY(student_id) REFERENCES students(id),
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
       UNIQUE(curator_id, student_id, month)
     );
 
@@ -261,7 +261,7 @@ export function initializeDatabase() {
       comment    TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY(teacher_id) REFERENCES users(id),
-      FOREIGN KEY(student_id) REFERENCES students(id),
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
       FOREIGN KEY(subject_id) REFERENCES subjects(id),
       UNIQUE(teacher_id, student_id, subject_id, month)
     );
@@ -511,7 +511,7 @@ export function initializeDatabase() {
       student_id INTEGER NOT NULL,
       score      REAL,
       FOREIGN KEY(quiz_id)    REFERENCES quizzes(id) ON DELETE CASCADE,
-      FOREIGN KEY(student_id) REFERENCES students(id),
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
       UNIQUE(quiz_id, student_id)
     );
   `);
@@ -619,6 +619,7 @@ export function initializeDatabase() {
       teacher_summary TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
       UNIQUE(student_id, month)
     )
   `);
@@ -673,6 +674,7 @@ export function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_attendance_lesson ON attendance(lesson_id);
     CREATE INDEX IF NOT EXISTS idx_ent_student_month ON ent_results(student_id, month);
     CREATE INDEX IF NOT EXISTS idx_lessons_schedule_date ON lessons(schedule_id, date);
+    CREATE INDEX IF NOT EXISTS idx_attendance_student_lesson ON attendance(student_id, lesson_id);
   `);
 
   // Seed permissions

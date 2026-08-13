@@ -1,6 +1,7 @@
-import React from "react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
+import { motion } from "framer-motion";
+import { EmptyState } from "@/components/EmptyState";
 import { useTranslation } from "react-i18next";
 import {
   LayoutDashboard, Users, UsersRound, BookOpen, GraduationCap,
@@ -137,12 +138,184 @@ function SearchBar({ value, onChange, placeholder }: { value: string; onChange: 
   );
 }
 
+// 
+//  USERS (USTAZY) SECTION
+// 
 
-const SUBJECT_TYPES = ["mandatory", "profile", "creative"];
-const SUBJ_LABELS: Record<string, string> = { mandatory: "Обязательный", profile: "Профильный", creative: "Творческий" };
-type SubjectForm = { name: string; type: "mandatory" | "profile" | "creative"; icon_name: string; color: string; };
-const emptySubject = (): SubjectForm => ({ name: "", type: "profile", icon_name: "BookOpen", color: "bg-blue-100 text-blue-700" });
+const ROLES = ["teacher", "umo_head", "admin"];
+const ROLE_LABELS: Record<string, string> = { teacher: "Устаз", umo_head: "УМО", admin: "Админ" };
 
-function SubjectsTab({ toast }
+type UserForm = { name: string; surname: string; phone: string; email: string; role: string; avatar_url: string };
+const emptyUser = (): UserForm => ({ name: "", surname: "", phone: "", email: "", role: "teacher", avatar_url: "" });
+
+
+type SubjectForm = { name: string; type: string };
+const emptySubject = (): SubjectForm => ({ name: "", type: "mandatory" });
+
+const SUBJECT_TYPES = ["mandatory", "elective", "extra"];
+const SUBJECT_TYPE_LABELS: Record<string, string> = { mandatory: "Обязательный", elective: "Элективный", extra: "Доп." };
+const SUBJECT_TYPE_COLORS: Record<string, string> = {
+  mandatory: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+  elective:  "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+  extra:     "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
+};
+
+
+function SubjectsTab({ toast }: { toast: ReturnType<typeof useToast>["toast"] }) {
+  const [subjects, setSubjects] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [sheet, setSheet] = useState<{ open: boolean; subject?: any }>({ open: false });
+  const [form, setForm] = useState<SubjectForm>(emptySubject());
+  const [saving, setSaving] = useState(false);
+  const [confirmDel, setConfirmDel] = useState<any | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setSubjects(await fetchSubjects());
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase();
+    return subjects.filter((s) => {
+      const match = s.name.toLowerCase().includes(q);
+      const typeMatch = typeFilter === "all" || s.type === typeFilter;
+      return match && typeMatch;
+    });
+  }, [subjects, search, typeFilter]);
+
+  function openCreate() { setForm(emptySubject()); setSheet({ open: true }); }
+  function openEdit(s: any) { setForm({ name: s.name, type: s.type ?? "mandatory" }); setSheet({ open: true, subject: s }); }
+
+  async function handleSave() {
+    if (!form.name.trim()) return;
+    setSaving(true);
+    try {
+      if (sheet.subject) {
+        await updateSubject(sheet.subject.id, form);
+        toast({ title: "Предмет обновлён", description: form.name });
+      } else {
+        await createSubject(form);
+        toast({ title: "Предмет добавлен", description: form.name });
+      }
+      await load();
+      setSheet({ open: false });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Ошибка", description: e.message });
+    } finally { setSaving(false); }
+  }
+
+  async function handleDelete() {
+    if (!confirmDel) return;
+    setDeleting(true);
+    try {
+      await deleteSubject(confirmDel.id);
+      toast({ title: "Предмет удалён" });
+      await load();
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Ошибка", description: e.message });
+    } finally { setDeleting(false); setConfirmDel(null); }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="flex-1">
+          <SearchBar value={search} onChange={setSearch} placeholder="Поиск по названию предмета" />
+        </div>
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <SelectTrigger className="w-40 h-9"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Все типы</SelectItem>
+            {SUBJECT_TYPES.map((t) => <SelectItem key={t} value={t}>{SUBJECT_TYPE_LABELS[t]}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Button size="sm" className="gap-1.5 h-9" onClick={openCreate}>
+          <Plus className="h-4 w-4" />Добавить
+        </Button>
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}</div>
+      ) : (
+        <div className="space-y-1.5">
+          {filtered.length === 0 ? (
+            <EmptyState icon={BookOpen} title="Предметы не найдены" description="По вашему запросу не найдено ни одного предмета." />
+          ) : filtered.map((s, i) => (
+            <motion.div initial={{opacity: 0, y: 10}} animate={{opacity: 1, y: 0}} transition={{delay: i * 0.05}} key={s.id} className="flex items-center gap-3 p-3 rounded-xl bg-card border hover:border-primary/50 hover:shadow-md transition-all group">
+              <div className="w-9 h-9 rounded-lg bg-muted flex items-center justify-center shrink-0">
+                <BookMarked className="h-4.5 w-4.5 text-muted-foreground" />
+              </div>
+              <div className="flex-1 min-w-0 flex items-center gap-3">
+                <p className="font-medium text-sm">{s.name}</p>
+                {s.type && (
+                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${SUBJECT_TYPE_COLORS[s.type] ?? SUBJECT_TYPE_COLORS.mandatory}`}>
+                    {SUBJECT_TYPE_LABELS[s.type] ?? s.type}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0">
+                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-primary/10" onClick={() => openEdit(s)}>
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-destructive/10 text-destructive" onClick={() => setConfirmDel(s)}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      )}
+
+      <Sheet open={sheet.open} onOpenChange={(o) => !o && setSheet({ open: false })}>
+        <SheetContent className="w-full sm:max-w-sm flex flex-col">
+          <SheetHeader>
+            <SheetTitle>{sheet.subject ? "Редактировать предмет" : "Добавить предмет"}</SheetTitle>
+          </SheetHeader>
+          <div className="space-y-4 mt-6 flex-1">
+            <div className="space-y-1">
+              <Label className="text-xs">Название *</Label>
+              <Input placeholder="Алгебра, Физика" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Тип</Label>
+              <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {SUBJECT_TYPES.map((t) => <SelectItem key={t} value={t}>{SUBJECT_TYPE_LABELS[t]}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <Separator className="my-4" />
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => setSheet({ open: false })}>Отмена</Button>
+            <Button onClick={handleSave} disabled={!form.name.trim() || saving} className="gap-1.5">
+              {saving ? "Сохранение" : <><Check className="h-4 w-4" />Сохранить</>}
+            </Button>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      <ConfirmDialog
+        open={!!confirmDel}
+        title="Удалить предмет?"
+        description={`${confirmDel?.name} будет удалён из системы.`}
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmDel(null)}
+        loading={deleting}
+      />
+    </div>
+  );
+}
+
+// 
+//  MAIN PAGE
+//
 
 export default SubjectsTab;

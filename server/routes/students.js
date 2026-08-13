@@ -1,6 +1,7 @@
 import express from "express";
 import multer from "multer";
 import bcrypt from "bcryptjs";
+import { logAction } from "../utils.js";
 const upload = multer({ dest: 'uploads/' });
 
 export default function(db, loginLimiter, handleAvatarUpload) {
@@ -120,19 +121,7 @@ router.delete("/:id", (req, res) => {
   try {
     const id = req.params.id;
     const st = db.prepare("SELECT full_name FROM students WHERE id = ?").get(id);
-    db.transaction(() => {
-      db.prepare("DELETE FROM attendance WHERE student_id = ?").run(id);
-      db.prepare("DELETE FROM ent_results WHERE student_id = ?").run(id);
-      db.prepare("DELETE FROM parent_feedback WHERE student_id = ?").run(id);
-      db.prepare("DELETE FROM curator_call_tasks WHERE student_id = ?").run(id);
-      db.prepare("DELETE FROM teacher_student_feedback WHERE student_id = ?").run(id);
-      db.prepare("DELETE FROM schedule_students WHERE student_id = ?").run(id);
-      db.prepare("DELETE FROM quiz_results WHERE student_id = ?").run(id);
-      db.prepare("DELETE FROM student_monthly_reports WHERE student_id = ?").run(id);
-      db.prepare("DELETE FROM ent_certificates WHERE student_id = ?").run(id);
-      db.prepare("DELETE FROM admission_custom_values WHERE student_id = ?").run(id);
-      db.prepare("DELETE FROM students WHERE id = ?").run(id);
-    })();
+    db.prepare("DELETE FROM students WHERE id = ?").run(id);
     logAction(req, { action: "delete", entityType: "student", entityId: Number(id), entityName: st?.full_name });
     res.json({ success: true });
   } catch (error) { res.status(500).json({ error: error.message }); }

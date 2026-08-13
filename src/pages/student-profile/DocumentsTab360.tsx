@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -57,6 +58,7 @@ export default function DocumentsTab360({ data }: Props) {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [previewDoc, setPreviewDoc] = useState<any | null>(null);
+  const [confirmDeleteDocId, setConfirmDeleteDocId] = useState<number | null>(null);
 
   const documentTypes = ["all", ...Array.from(new Set(documents.map((d: any) => d.type))) as string[]];
 
@@ -97,9 +99,13 @@ export default function DocumentsTab360({ data }: Props) {
   };
 
   const handleDelete = (docId: number) => {
-    if (confirm("Вы уверены, что хотите удалить этот документ?")) {
-      alert(`Документ ${docId} удален (demo)`);
-    }
+    setConfirmDeleteDocId(docId);
+  };
+
+  const executeDelete = () => {
+    if (confirmDeleteDocId === null) return;
+    alert(`Документ ${confirmDeleteDocId} удален (demo)`);
+    setConfirmDeleteDocId(null);
   };
 
   return (
@@ -406,6 +412,13 @@ export default function DocumentsTab360({ data }: Props) {
           </div>
         </CardContent>
       </Card>
+      <ConfirmDialog
+        open={confirmDeleteDocId !== null}
+        title="Удалить документ?"
+        description="Вы уверены, что хотите удалить этот документ?"
+        onConfirm={executeDelete}
+        onCancel={() => setConfirmDeleteDocId(null)}
+      />
     </div>
   );
 }

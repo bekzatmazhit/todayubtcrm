@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef, Fragment } fr
 import { GroupPersonAvatar } from "@/components/GroupPersonAvatar";
 import * as XLSX from "xlsx";
 import { addExcelWatermarkSheet } from "@/lib/watermark";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   BarChart3, Users, TrendingUp, Edit, ArrowUp, ArrowDown, Minus,
   Trophy, Medal, Crown, Filter, ChevronsUpDown, ChevronUp, ChevronDown,
@@ -30,13 +31,14 @@ import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Cell, LabelList,
 } from "recharts";
 import { useAuth } from "@/contexts/AuthContext";
-import { fetchEntResults, fetchGroups, saveEntResultsBatch, fetchStudents, deleteEntResults } from "@/lib/api";
+import { fetchGroups, saveEntResultsBatch, fetchStudents, deleteEntResults } from "@/lib/api";
+import { useEntResults, useAllEntResults } from "./ent-results/hooks/useEntData";
 
 /* ══════ Constants ══════ */
 
-const TOTAL_MAX = 140; // 20 + 10 + 10 + 50 + 50
+export const TOTAL_MAX = 140; // 20 + 10 + 10 + 50 + 50
 
-const ACADEMIC_MONTHS = [
+export const ACADEMIC_MONTHS = [
   { value: "2026-08", label: "Август", short: "Авг" },
   { value: "2026-09", label: "Сентябрь", short: "Сен" },
   { value: "2026-10", label: "Октябрь", short: "Окт" },
@@ -51,21 +53,21 @@ const ACADEMIC_MONTHS = [
   { value: "2027-07", label: "Июль", short: "Июл" },
 ];
 
-const REAL_EXAM_TYPES = [
+export const REAL_EXAM_TYPES = [
   { value: "1000-01", label: "Январьский реальный ЕНТ", short: "Янв.ЕНТ" },
   { value: "1000-03", label: "Мартовский реальный ЕНТ", short: "Мар.ЕНТ" },
   { value: "1001-01", label: "Грантовский 1", short: "Грант 1" },
   { value: "1001-02", label: "Грантовский 2", short: "Грант 2" },
 ];
 
-const MONTH_LABELS: Record<string, string> = {};
-const MONTH_SHORT: Record<string, string> = {};
+export const MONTH_LABELS: Record<string, string> = {};
+export const MONTH_SHORT: Record<string, string> = {};
 for (const m of ACADEMIC_MONTHS) { MONTH_LABELS[m.value] = m.label; MONTH_SHORT[m.value] = m.short; }
 for (const m of REAL_EXAM_TYPES) { MONTH_LABELS[m.value] = m.label; MONTH_SHORT[m.value] = m.short; }
 
 // Profile → 5 ENT subjects (3 mandatory + 2 profile)
 // История: max 20, Чтение: max 10, Мат.грам: max 10, Профильные: max 50
-const ENT_PROFILE_SUBJECTS: Record<number, { id: number; name: string; short: string; max: number }[]> = {
+export const ENT_PROFILE_SUBJECTS: Record<number, { id: number; name: string; short: string; max: number }[]> = {
   1: [ // ФМ (Мат-Физ)
     { id: 1, name: "История Казахстана", short: "ИК", max: 20 },
     { id: 8, name: "Грамотность чтения", short: "ГЧ", max: 10 },
@@ -97,7 +99,7 @@ const MANDATORY_SUBJECTS = [
 
 const CHART_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#3b82f6"];
 
-const GROUP_ROW_COLORS = [
+export const GROUP_ROW_COLORS = [
   'bg-blue-500/[0.03]',
   'bg-violet-500/[0.03]',
   'bg-amber-500/[0.03]',
@@ -107,9 +109,9 @@ const GROUP_ROW_COLORS = [
   'bg-orange-500/[0.03]',
   'bg-pink-500/[0.03]',
 ];
-const getGroupRowColor = (groupId: number) => GROUP_ROW_COLORS[(groupId - 1) % GROUP_ROW_COLORS.length];
+export const getGroupRowColor = (groupId: number) => GROUP_ROW_COLORS[(groupId - 1) % GROUP_ROW_COLORS.length];
 
-function getScoreColor(score: number, max: number) {
+export function getScoreColor(score: number, max: number) {
   const pct = score / max;
   if (pct >= 0.8) return "text-emerald-600 dark:text-emerald-400 font-bold";
   if (pct >= 0.6) return "text-foreground font-semibold";
@@ -117,7 +119,7 @@ function getScoreColor(score: number, max: number) {
   return "text-red-500 font-medium";
 }
 
-function getScoreBg(score: number, max: number) {
+export function getScoreBg(score: number, max: number) {
   const pct = score / max;
   if (pct >= 0.8) return "bg-emerald-500";
   if (pct >= 0.6) return "bg-blue-500";
@@ -125,13 +127,13 @@ function getScoreBg(score: number, max: number) {
   return "bg-red-500";
 }
 
-function DeltaBadge({ delta }: { delta: number }) {
+export function DeltaBadge({ delta }: { delta: number }) {
   if (delta > 0) return <span className="inline-flex items-center text-[11px] text-green-600 font-medium"><ArrowUp className="h-3 w-3" />+{delta}</span>;
   if (delta < 0) return <span className="inline-flex items-center text-[11px] text-red-600 font-medium"><ArrowDown className="h-3 w-3" />{delta}</span>;
   return <span className="inline-flex items-center text-[11px] text-muted-foreground"><Minus className="h-3 w-3" /></span>;
 }
 
-function getMatrixCellBg(score: number, max: number) {
+export function getMatrixCellBg(score: number, max: number) {
   if (!score || score <= 0) return "";
   const pct = score / max;
   if (pct >= 0.85) return "bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 font-bold";
@@ -143,508 +145,22 @@ function getMatrixCellBg(score: number, max: number) {
 
 /* ══════ Types ══════ */
 
-interface RawEntResult {
+export interface RawEntResult {
   id: number; student_id: number; subject_id: number; score: number;
   month: string; student_name: string; subject_name: string;
   group_id: number; group_name: string;
 }
 
-interface StudentRow {
+export interface StudentRow {
   id: number; full_name: string; group_name: string; group_id: number;
   scores: Record<number, number>; total: number;
 }
 
 /* ══════ Real ENT Dialog (Manual + CSV) ══════ */
 
-interface ParsedRow {
-  name: string;
-  studentId: number | null;
-  scores: Record<number, number | "">;
-  errors: string[];
-}
-
-type EntryMode = "manual" | "csv";
-
-function RealEntImportDialog({ open, onOpenChange, groups, onSuccess }: {
-  open: boolean;
-  onOpenChange: (o: boolean) => void;
-  groups: any[];
-  onSuccess: (examType: string) => void;
-}) {
-  const [mode, setMode] = useState<EntryMode>("manual");
-  const [groupId, setGroupId] = useState("");
-  const [examType, setExamType] = useState(REAL_EXAM_TYPES[0].value);
-  const [students, setStudents] = useState<{ id: number; full_name: string }[]>([]);
-
-  // Manual mode state
-  const [manualValues, setManualValues] = useState<Record<number, Record<number, string>>>({});
-  const [savedStudents, setSavedStudents] = useState<Set<number>>(new Set());
-  const [manualSaving, setManualSaving] = useState<number | null>(null);
-
-  // CSV mode state
-  const [csvText, setCsvText] = useState("");
-  const [parseResult, setParseResult] = useState<ParsedRow[] | null>(null);
-  const [csvSaving, setCsvSaving] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const selectedGroup = groups.find((g: any) => String(g.id) === groupId);
-  const profileId: number = selectedGroup?.profile_id || 1;
-  const subjects = ENT_PROFILE_SUBJECTS[profileId] || ENT_PROFILE_SUBJECTS[1];
-
-  // Load students when group changes
-  useEffect(() => {
-    if (!groupId) { setStudents([]); setManualValues({}); setSavedStudents(new Set()); return; }
-    fetchStudents().then((all: any[]) => {
-      const filtered = all.filter(s => String(s.group_id) === groupId);
-      setStudents(filtered);
-      // Init empty manual values
-      const init: Record<number, Record<number, string>> = {};
-      for (const st of filtered) {
-        init[st.id] = {};
-        for (const subj of ENT_PROFILE_SUBJECTS[profileId] || ENT_PROFILE_SUBJECTS[1]) {
-          init[st.id][subj.id] = "";
-        }
-      }
-      setManualValues(init);
-      setSavedStudents(new Set());
-    });
-  }, [groupId]);
-
-  // Re-init manual values cols when profile changes (group changes)
-  useEffect(() => {
-    if (students.length === 0) return;
-    setManualValues(prev => {
-      const next: Record<number, Record<number, string>> = {};
-      for (const st of students) {
-        next[st.id] = {};
-        for (const subj of subjects) {
-          next[st.id][subj.id] = prev[st.id]?.[subj.id] ?? "";
-        }
-      }
-      return next;
-    });
-  }, [subjects]);
-
-  // Reset on close
-  useEffect(() => {
-    if (!open) {
-      setGroupId(""); setExamType(REAL_EXAM_TYPES[0].value);
-      setCsvText(""); setParseResult(null); setCsvSaving(false);
-      setManualValues({}); setSavedStudents(new Set()); setManualSaving(null);
-    }
-  }, [open]);
-
-  // ── Manual: save one student ──
-  const saveOneStudent = async (studentId: number) => {
-    const vals = manualValues[studentId] || {};
-    const scores = subjects
-      .filter(s => vals[s.id] !== "" && vals[s.id] != null)
-      .map(s => ({ student_id: studentId, subject_id: s.id, score: parseInt(vals[s.id]) || 0, month: examType }));
-    if (!scores.length) return;
-    setManualSaving(studentId);
-    await saveEntResultsBatch(scores);
-    setManualSaving(null);
-    setSavedStudents(prev => new Set([...prev, studentId]));
-  };
-
-  // ── Manual: save ALL at once ──
-  const saveAllManual = async () => {
-    const scores = students.flatMap(st => {
-      const vals = manualValues[st.id] || {};
-      return subjects
-        .filter(s => vals[s.id] !== "" && vals[s.id] != null)
-        .map(s => ({ student_id: st.id, subject_id: s.id, score: parseInt(vals[s.id]) || 0, month: examType }));
-    });
-    if (!scores.length) return;
-    setManualSaving(-1);
-    await saveEntResultsBatch(scores);
-    setManualSaving(null);
-    setSavedStudents(new Set(students.map(st => st.id)));
-    onSuccess(examType);
-    onOpenChange(false);
-  };
-
-  const manualTotal = (studentId: number) => {
-    const vals = manualValues[studentId] || {};
-    return subjects.reduce((sum, s) => sum + (parseInt(vals[s.id] || "") || 0), 0);
-  };
-
-  const manualFilledCount = students.filter(st =>
-    subjects.some(s => (manualValues[st.id]?.[s.id] || "") !== "")
-  ).length;
-
-  // ── CSV helpers ──
-  const downloadTemplate = () => {
-    const header = ["ФИО", ...subjects.map(s => s.short)].join(",");
-    const rows = students.map(s => [s.full_name, ...subjects.map(() => "")].join(","));
-    const csv = [header, ...rows].join("\n");
-    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `ent_шаблон_${REAL_EXAM_TYPES.find(e => e.value === examType)?.short || examType}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const parseCSV = (text: string): ParsedRow[] => {
-    const lines = text.trim().split(/\r?\n/);
-    if (lines.length < 2) return [];
-    const sep = lines[0].includes(";") ? ";" : lines[0].includes("\t") ? "\t" : ",";
-    const headers = lines[0].split(sep).map(h => h.trim().replace(/^\ufeff/, ""));
-    const subjectColMap: Record<number, number> = {};
-    for (const s of subjects) {
-      const idx = headers.findIndex(h => h.toLowerCase() === s.short.toLowerCase());
-      if (idx >= 0) subjectColMap[s.id] = idx;
-    }
-    return lines.slice(1).filter(l => l.trim()).map(line => {
-      const cells = line.split(sep).map(c => c.trim().replace(/^"|"$/g, ""));
-      const name = cells[0] || "";
-      const matched =
-        students.find(s => s.full_name.trim().toLowerCase() === name.trim().toLowerCase()) ||
-        students.find(s => name.trim().length > 3 && s.full_name.trim().toLowerCase().includes(name.trim().toLowerCase()));
-      const errors: string[] = [];
-      if (!matched) errors.push("Ученик не найден");
-      const scores: Record<number, number | ""> = {};
-      for (const s of subjects) {
-        const colIdx = subjectColMap[s.id];
-        if (colIdx == null) continue;
-        const raw = cells[colIdx] || "";
-        if (raw === "") { scores[s.id] = ""; continue; }
-        const n = Number(raw);
-        if (isNaN(n) || n < 0 || n > s.max) errors.push(`${s.short}: "${raw}" (0–${s.max})`);
-        else scores[s.id] = n;
-      }
-      return { name, studentId: matched?.id ?? null, scores, errors };
-    });
-  };
-
-  const handleCsvChange = (text: string) => {
-    setCsvText(text);
-    setParseResult(text.trim() && students.length > 0 ? parseCSV(text) : null);
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => handleCsvChange(ev.target?.result as string ?? "");
-    reader.readAsText(file, "utf-8");
-    e.target.value = "";
-  };
-
-  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
-  const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); };
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault(); setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => handleCsvChange(ev.target?.result as string ?? "");
-    reader.readAsText(file, "utf-8");
-  };
-
-  const validRows = parseResult?.filter(r => r.studentId != null && r.errors.length === 0) ?? [];
-  const errorRows = parseResult?.filter(r => r.errors.length > 0) ?? [];
-
-  const handleCsvSave = async () => {
-    if (!validRows.length) return;
-    setCsvSaving(true);
-    const scores = validRows.flatMap(row =>
-      subjects
-        .filter(s => row.scores[s.id] !== "" && row.scores[s.id] != null)
-        .map(s => ({ student_id: row.studentId!, subject_id: s.id, score: row.scores[s.id] as number, month: examType }))
-    );
-    await saveEntResultsBatch(scores);
-    setCsvSaving(false);
-    onSuccess(examType);
-    onOpenChange(false);
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[95vw] sm:max-w-4xl max-h-[92vh] flex flex-col p-0 gap-0 shadow-2xl rounded-xl border-0 overflow-hidden">
-        <DialogTitle className="sr-only">Ввод баллов ЕНТ</DialogTitle>
-        {/* Header */}
-        <div className="px-6 pt-6 pb-5 border-b bg-gradient-to-r from-muted/50 to-background flex items-start justify-between gap-3 relative">
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary to-primary/50" />
-          <div>
-            <h2 className="text-lg font-bold flex items-center gap-2">
-              <BarChart3 className="h-5 w-5 text-primary" />
-              Ввод баллов ЕНТ
-            </h2>
-            <p className="text-sm text-muted-foreground mt-1 font-medium">Добавьте баллы вручную или загрузите через CSV/Excel файл</p>
-          </div>
-          <button onClick={() => onOpenChange(false)} className="h-8 w-8 rounded-full bg-muted/50 flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground transition-colors mt-0.5">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* Config row */}
-        <div className="px-6 py-3 border-b bg-muted/30 flex flex-wrap gap-3 items-end">
-          <div className="flex-1 min-w-[140px]">
-            <Label className="text-xs font-medium mb-1 block">Группа</Label>
-            <Select value={groupId} onValueChange={g => { setGroupId(g); setParseResult(null); setCsvText(""); }}>
-              <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Выберите группу" /></SelectTrigger>
-              <SelectContent>
-                {groups.map((g: any) => (
-                  <SelectItem key={g.id} value={String(g.id)}><span className="flex items-center gap-1.5"><GroupPersonAvatar groupName={g.name} avatarUrl={g.avatar_url} size={18} showTooltip={false} />{g.name}</span></SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex-1 min-w-[160px]">
-            <Label className="text-xs font-semibold mb-1.5 block text-muted-foreground uppercase tracking-wider">Экзамен</Label>
-            <Select value={examType} onValueChange={v => { setExamType(v); setSavedStudents(new Set()); }}>
-              <SelectTrigger className="h-9 text-sm border-muted-foreground/20"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectLabel className="bg-muted/50">Пробные ЕНТ (Внутренние)</SelectLabel>
-                  {ACADEMIC_MONTHS.map(e => <SelectItem key={e.value} value={e.value} className="pl-6">{e.label}</SelectItem>)}
-                </SelectGroup>
-                <SelectGroup>
-                  <SelectLabel className="bg-muted/50 mt-1">Реальные ЕНТ (Официальные)</SelectLabel>
-                  {REAL_EXAM_TYPES.map(e => <SelectItem key={e.value} value={e.value} className="pl-6">{e.label}</SelectItem>)}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </div>
-          {/* Mode switcher */}
-          <div className="flex rounded-lg bg-muted/50 p-1 text-xs font-medium border">
-            <button
-              onClick={() => setMode("manual")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all duration-200 ${mode === "manual" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
-            >
-              <PenLine className="h-3.5 w-3.5" /> Вручную
-            </button>
-            <button
-              onClick={() => setMode("csv")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all duration-200 ${mode === "csv" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
-            >
-              <TableIcon className="h-3.5 w-3.5" /> Загрузка файла
-            </button>
-          </div>
-        </div>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
-          {!groupId ? (
-            <div className="text-center py-10 text-muted-foreground text-sm">Выберите группу для начала</div>
-          ) : mode === "manual" ? (
-            /* ── MANUAL MODE ── */
-            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-              {/* Subject header */}
-              <div className="flex items-center gap-2 bg-primary/5 border border-primary/10 rounded-xl p-3">
-                <span className="text-sm font-medium text-foreground">Максимальные баллы:</span>
-                {subjects.map(s => (
-                  <Badge key={s.id} variant="secondary" className="bg-background shadow-sm border border-border/50 text-xs py-0.5">{s.short} <span className="text-muted-foreground/50 ml-1">/{s.max}</span></Badge>
-                ))}
-              </div>
-              
-              <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
-                {/* Header row */}
-                <div className="grid text-xs font-semibold text-muted-foreground bg-muted/30 py-2.5 border-b uppercase tracking-wider" style={{ gridTemplateColumns: `1.5fr ${subjects.map(() => "80px").join(" ")} 80px 100px` }}>
-                  <div className="pl-4">Ученик</div>
-                  {subjects.map(s => <div key={s.id} className="text-center">{s.short}</div>)}
-                  <div className="text-center">Итого</div>
-                  <div />
-                </div>
-                {/* Student rows */}
-                <div className="divide-y divide-border/50">
-                  {students.map(st => {
-                    const total = manualTotal(st.id);
-                    const isSaved = savedStudents.has(st.id);
-                    const isSaving = manualSaving === st.id;
-                    const hasSomeValue = subjects.some(s => (manualValues[st.id]?.[s.id] || "") !== "");
-                    
-                    return (
-                      <div key={st.id}
-                        className={`grid items-center py-2 transition-colors ${isSaved ? "bg-green-50/50 dark:bg-green-950/10" : "hover:bg-muted/30"}`}
-                        style={{ gridTemplateColumns: `1.5fr ${subjects.map(() => "80px").join(" ")} 80px 100px` }}
-                      >
-                        <div className="text-sm font-medium truncate pl-4 pr-2 flex items-center gap-2">
-                          {isSaved ? <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" /> : <div className="h-4 w-4 shrink-0 rounded-full border border-muted-foreground/30" />}
-                          <span className={isSaved ? "text-muted-foreground" : "text-foreground"}>{st.full_name}</span>
-                        </div>
-                        {subjects.map(s => {
-                          const val = manualValues[st.id]?.[s.id] ?? "";
-                          const numVal = parseInt(val);
-                          const isInvalid = val !== "" && (isNaN(numVal) || numVal < 0 || numVal > s.max);
-                          
-                          return (
-                            <div key={s.id} className="px-2">
-                              <Input
-                                type="number" min={0} max={s.max}
-                                value={val}
-                                onChange={e => {
-                                  setManualValues(prev => ({ ...prev, [st.id]: { ...prev[st.id], [s.id]: e.target.value } }));
-                                  setSavedStudents(prev => { const next = new Set(prev); next.delete(st.id); return next; });
-                                }}
-                                className={`h-8 text-center text-sm px-1 font-mono focus-visible:ring-1 ${isInvalid ? "border-red-500 bg-red-50 focus-visible:ring-red-500" : "bg-muted/20 border-border/50"}`}
-                                placeholder="—"
-                              />
-                            </div>
-                          );
-                        })}
-                        <div className="text-center">
-                          <span className={`inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-bold ${total > 0 ? getScoreColor(total, TOTAL_MAX).replace("text-", "bg-").replace("-500", "-500/10 text-") + getScoreColor(total, TOTAL_MAX).split(" ")[0].replace("text-", "") : "bg-muted/50 text-muted-foreground/40"}`}>
-                            {total > 0 ? total : "—"}
-                          </span>
-                        </div>
-                        <div className="flex justify-end pr-4">
-                          <Button
-                            size="sm"
-                            variant={isSaved ? "secondary" : "default"}
-                            className={`h-7 px-3 text-xs shadow-none ${isSaved ? "bg-green-100 text-green-700 hover:bg-green-200 border-green-200 dark:bg-green-900/40 dark:text-green-400 dark:border-green-800" : "bg-primary/90 hover:bg-primary"}`}
-                            disabled={!hasSomeValue || isSaving || manualSaving === -1}
-                            onClick={() => saveOneStudent(st.id)}
-                          >
-                            {isSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : isSaved ? "Сохранено" : "Сохранить"}
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          ) : (
-            /* ── CSV MODE ── */
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-              <div className="flex items-center gap-2 flex-wrap text-sm font-medium bg-primary/5 border border-primary/10 rounded-xl p-3">
-                <FileText className="h-4 w-4 text-primary shrink-0" />
-                <span className="text-foreground">Ожидаемые колонки:</span>
-                {subjects.map(s => (
-                  <Badge key={s.id} variant="secondary" className="bg-background shadow-sm border border-border/50 text-xs py-0.5">{s.short} (0–{s.max})</Badge>
-                ))}
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Drag and Drop Zone */}
-                <div 
-                  onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
-                  className={`relative flex flex-col items-center justify-center p-8 rounded-xl border-2 border-dashed transition-all duration-200 cursor-pointer ${isDragging ? "border-primary bg-primary/5 scale-[1.02]" : "border-muted-foreground/20 hover:border-primary/50 hover:bg-muted/30"}`}
-                  onClick={() => fileRef.current?.click()}
-                >
-                  <div className={`p-4 rounded-full mb-3 ${isDragging ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
-                    <Upload className="h-8 w-8" />
-                  </div>
-                  <h3 className="font-semibold text-lg text-foreground mb-1">{isDragging ? "Отпустите файл" : "Нажмите или перетащите файл"}</h3>
-                  <p className="text-sm text-muted-foreground text-center mb-4">Поддерживаются форматы .csv и .txt</p>
-                  <Button variant="outline" size="sm" className="bg-background pointer-events-none gap-2 rounded-full">
-                    <FileText className="h-4 w-4" /> Выбрать файл
-                  </Button>
-                  <input ref={fileRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleFileChange} />
-                </div>
-                
-                {/* Textarea Paste Zone */}
-                <div className="flex flex-col h-full relative">
-                  <Label className="text-xs font-semibold mb-2 block text-muted-foreground uppercase tracking-wider">Или вставьте текст CSV</Label>
-                  <div className="relative flex-1 group">
-                    <textarea
-                      value={csvText}
-                      onChange={e => handleCsvChange(e.target.value)}
-                      placeholder={`ФИО,${subjects.map(s => s.short).join(",")}\nИванов Иван,15,8,7,...`}
-                      className="w-full h-full min-h-[160px] rounded-xl border border-input bg-muted/20 px-4 py-3 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-primary focus:bg-background transition-colors placeholder:text-muted-foreground/40 shadow-sm"
-                    />
-                    {csvText && (
-                      <button onClick={() => setCsvText("")} className="absolute top-2 right-2 p-1.5 bg-background border rounded-md shadow-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-muted text-muted-foreground hover:text-foreground">
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                  <div className="mt-3 flex justify-end">
-                    <Button variant="ghost" size="sm" className="gap-1.5 h-8 text-xs font-medium text-muted-foreground hover:text-foreground" onClick={downloadTemplate} disabled={students.length === 0}>
-                      <Download className="h-3.5 w-3.5" />
-                      Скачать шаблон
-                    </Button>
-                  </div>
-                </div>
-              </div>
-              {parseResult && parseResult.length > 0 && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium">Предпросмотр ({parseResult.length} строк)</span>
-                    <div className="flex gap-2">
-                      <Badge variant="outline" className="text-green-600 border-green-200">✓ {validRows.length} ок</Badge>
-                      {errorRows.length > 0 && <Badge variant="outline" className="text-red-600 border-red-200">✗ {errorRows.length} ошибок</Badge>}
-                    </div>
-                  </div>
-                  <div className="rounded-md border overflow-auto max-h-52">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="bg-muted/60 border-b sticky top-0">
-                          <th className="px-2 py-1.5 text-left font-medium w-7">#</th>
-                          <th className="px-2 py-1.5 text-left font-medium">ФИО</th>
-                          {subjects.map(s => <th key={s.id} className="px-2 py-1.5 text-center font-medium">{s.short}</th>)}
-                          <th className="px-2 py-1.5 text-left font-medium">Статус</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {parseResult.map((row, i) => (
-                          <tr key={i} className={`border-b last:border-0 ${row.errors.length > 0 ? "bg-red-50 dark:bg-red-950/20" : "hover:bg-muted/20"}`}>
-                            <td className="px-2 py-1 text-muted-foreground">{i + 1}</td>
-                            <td className="px-2 py-1 font-medium max-w-[140px] truncate">{row.name}</td>
-                            {subjects.map(s => (
-                              <td key={s.id} className="px-2 py-1 text-center">
-                                {row.scores[s.id] !== "" && row.scores[s.id] != null
-                                  ? <span className="font-mono">{row.scores[s.id]}</span>
-                                  : <span className="text-muted-foreground/30">—</span>}
-                              </td>
-                            ))}
-                            <td className="px-2 py-1">
-                              {row.errors.length === 0
-                                ? <span className="text-green-600">✓</span>
-                                : <span className="text-red-600 text-[10px]">{row.errors.join("; ")}</span>}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-3 border-t bg-muted/20 flex items-center justify-between gap-2">
-          <div className="text-xs text-muted-foreground">
-            {mode === "manual" && groupId && (
-              <>{manualFilledCount} / {students.length} заполнено · {savedStudents.size} сохранено</>
-            )}
-            {mode === "csv" && parseResult && (
-              <>{validRows.length} из {parseResult.length} строк готовы к сохранению</>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Закрыть</Button>
-            {mode === "manual" ? (
-              <Button
-                size="sm"
-                disabled={manualFilledCount === 0 || manualSaving === -1}
-                onClick={saveAllManual}
-                className="gap-1.5"
-              >
-                {manualSaving === -1 ? "Сохранение..." : `Сохранить всё (${manualFilledCount})`}
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                disabled={csvSaving || validRows.length === 0}
-                onClick={handleCsvSave}
-                className="gap-1.5"
-              >
-                {csvSaving ? "Сохранение..." : `Сохранить ${validRows.length} записей`}
-              </Button>
-            )}
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
+import { RealEntImportDialog } from "./ent-results/components/RealEntImportDialog";
+import { EntAnalyticsTab } from "./ent-results/tabs/EntAnalyticsTab";
+import { EntMatrixTab } from "./ent-results/tabs/EntMatrixTab";
 
 /* ══════ Score Editor Dialog ══════ */
 
@@ -679,18 +195,23 @@ function ScoreEditorDialog({ student, month, profileId, currentScores, onSave, o
     onClose();
   };
 
-  const handleDelete = async () => {
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+
+  const handleDelete = () => setConfirmDeleteOpen(true);
+  
+  const executeDelete = async () => {
     if (!student || !onDelete) return;
-    if (!confirm("Вы уверены что хотите удалить все баллы этого ученика за этот месяц?")) return;
     setSaving(true);
     await onDelete(student.id, month);
     setSaving(false);
+    setConfirmDeleteOpen(false);
     onClose();
   };
 
   if (!student) return null;
 
   return (
+    <>
     <Dialog open onOpenChange={open => !open && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
@@ -720,6 +241,15 @@ function ScoreEditorDialog({ student, month, profileId, currentScores, onSave, o
         </div>
       </DialogContent>
     </Dialog>
+    <ConfirmDialog
+        open={confirmDeleteOpen}
+        title="Удалить баллы?"
+        description="Вы уверены, что хотите удалить все баллы этого ученика за этот месяц?"
+        onConfirm={executeDelete}
+        onCancel={() => setConfirmDeleteOpen(false)}
+        loading={saving}
+      />
+    </>
   );
 }
 
@@ -1133,54 +663,46 @@ export default function EntResultsPage() {
   const [selectedGroupId, setSelectedGroupId] = useState("");
   const [selectedMonth, setSelectedMonth] = useState("2026-02");
   const [search, setSearch] = useState("");
-  const [rawData, setRawData] = useState<RawEntResult[]>([]);
-  const [allData, setAllData] = useState<RawEntResult[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [chartStudentId, setChartStudentId] = useState("avg");
+  
   const [editStudent, setEditStudent] = useState<{ id: number; full_name: string; month?: string } | null>(null);
+  
   const [xlsxImportOpen, setXlsxImportOpen] = useState(false);
   const [realEntImportOpen, setRealEntImportOpen] = useState(false);
-
-  // тФАтФА Enhanced filters & sorting тФАтФА
-  const [sortColumn, setSortColumn] = useState<string>("total");
-  const [matrixSortCol, setMatrixSortCol] = useState<string>("name");
-  const [matrixSortDir, setMatrixSortDir] = useState<"asc" | "desc">("asc");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
-  const [scoreRange, setScoreRange] = useState<[number, number]>([0, TOTAL_MAX]);
-  const [performanceFilter, setPerformanceFilter] = useState<string>("all"); // all | high | medium | low | critical
-  const [showFilters, setShowFilters] = useState(false);
-  const [profileFilter, setProfileFilter] = useState<string>("all"); // all | 1 | 2 | 3
-  const [dataMode, setDataMode] = useState<"training" | "real">("training");
-  const [statusFilter, setStatusFilter] = useState("active");
-  const [activeTab, setActiveTab] = useState("table");
   
   // Matrix specific state
   const [showMatrixSubjects, setShowMatrixSubjects] = useState(false);
   const [hiddenMatrixMonths, setHiddenMatrixMonths] = useState<Set<string>>(new Set());
 
+  // Enhanced filters & sorting
+  const [sortColumn, setSortColumn] = useState<string>("total");
+  const [matrixSortCol, setMatrixSortCol] = useState<string>("name");
+  const [matrixSortDir, setMatrixSortDir] = useState<"asc" | "desc">("asc");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [scoreRange, setScoreRange] = useState<[number, number]>([0, TOTAL_MAX]);
+  const [performanceFilter, setPerformanceFilter] = useState<string>("all");
+  const [showFilters, setShowFilters] = useState(false);
+  const [profileFilter, setProfileFilter] = useState<string>("all");
+  const [dataMode, setDataMode] = useState<"training" | "real">("training");
+  const [statusFilter, setStatusFilter] = useState("active");
+  const [activeTab, setActiveTab] = useState("table");
 
   useEffect(() => {
     fetchGroups().then(g => { setGroups(g); setSelectedGroupId("all"); });
   }, []);
 
-  useEffect(() => {
-    if (!selectedGroupId) return;
-    const gid = selectedGroupId === "all" ? undefined : parseInt(selectedGroupId);
-    fetchEntResults(undefined, gid, statusFilter).then((data: RawEntResult[]) => {
-      setAllData(data);
-      const months = [...new Set(data.map(r => r.month))].sort();
-      if (months.length > 0) setSelectedMonth(months[months.length - 1]);
-    });
-  }, [selectedGroupId, statusFilter]);
+  const { data: allData = [], isLoading: isLoadingAll } = useAllEntResults(selectedGroupId || 'all', statusFilter);
+  const { data: rawData = [], isLoading: isLoadingCurrent } = useEntResults(selectedMonth, selectedGroupId || 'all', statusFilter);
+  
+  const loading = isLoadingAll || isLoadingCurrent;
 
   useEffect(() => {
-    if (!selectedGroupId || !selectedMonth) return;
-    setLoading(true);
-    const gid = selectedGroupId === "all" ? undefined : parseInt(selectedGroupId);
-    fetchEntResults(selectedMonth, gid, statusFilter).then((data: RawEntResult[]) => { setRawData(data); setLoading(false); });
-  }, [selectedMonth, selectedGroupId, statusFilter]);
-
-
+    if (allData.length > 0) {
+      const months = [...new Set(allData.map((r: any) => r.month))].sort();
+      if (months.length > 0 && !months.includes(selectedMonth)) {
+         setSelectedMonth(months[months.length - 1]);
+      }
+    }
+  }, [allData, selectedMonth]);
 
   const isAllGroups = selectedGroupId === "all";
   const selectedGroup = useMemo(() => groups.find(g => String(g.id) === selectedGroupId), [groups, selectedGroupId]);
@@ -1466,115 +988,7 @@ export default function EntResultsPage() {
     }).sort((a, b) => b.last - a.last);
   }, [modeAllData, activeMonthsList]);
 
-  // тФАтФАтФАтФА Total chart data тФАтФАтФАтФА
-  const chartData = useMemo(() => {
-    const studentMonths: Record<string, Record<string, number>> = {};
-    const studentNames: Record<number, string> = {};
-    for (const r of modeAllData) {
-      studentNames[r.student_id] = r.student_name;
-      const sid = String(r.student_id);
-      if (!studentMonths[sid]) studentMonths[sid] = {};
-      if (!studentMonths[sid][r.month]) studentMonths[sid][r.month] = 0;
-      studentMonths[sid][r.month] += r.score;
-    }
-    const months = activeMonthsList.map(m => m.value);
-    const avgByMonth: Record<string, { sum: number; count: number }> = {};
-    for (const sid of Object.keys(studentMonths)) for (const m of months) { const t = studentMonths[sid]?.[m] || 0; if (t === 0) continue; if (!avgByMonth[m]) avgByMonth[m] = { sum: 0, count: 0 }; avgByMonth[m].sum += t; avgByMonth[m].count++; }
-
-    if (chartStudentId === "avg") {
-      return months.filter(m => avgByMonth[m]).map(m => ({
-        month: MONTH_SHORT[m] || m, monthFull: MONTH_LABELS[m] || m,
-        ["╨б╤А╨╡╨┤╨╜╨╕╨╣ ╨▒╨░╨╗╨╗"]: avgByMonth[m] ? Math.round(avgByMonth[m].sum / avgByMonth[m].count) : 0,
-      }));
-    }
-    const sid = chartStudentId;
-    const name = studentNames[parseInt(sid)] || "╨г╤З╨╡╨╜╨╕╨║";
-    return months.filter(m => (studentMonths[sid]?.[m] || 0) > 0 || avgByMonth[m]).map(m => {
-      const pt: Record<string, string | number> = { month: MONTH_SHORT[m] || m, monthFull: MONTH_LABELS[m] || m };
-      const st = studentMonths[sid]?.[m] || 0;
-      if (st > 0) pt[name] = st;
-      if (avgByMonth[m]) pt["╨б╤А╨╡╨┤╨╜╨╕╨╣ ╨┐╨╛ ╨│╤А╤Г╨┐╨┐╨╡"] = Math.round(avgByMonth[m].sum / avgByMonth[m].count);
-      return pt;
-    });
-  }, [modeAllData, chartStudentId, activeMonthsList]);
-
-  // Per-subject chart data for individual student
-  const subjectChartData = useMemo(() => {
-    if (chartStudentId === "avg") return [];
-    const sid = parseInt(chartStudentId);
-    const studentData = modeAllData.filter(r => r.student_id === sid);
-    const months = activeMonthsList.map(m => m.value).filter(m => studentData.some(r => r.month === m));
-    return months.map(m => {
-      const point: Record<string, string | number> = { month: MONTH_SHORT[m] || m };
-      for (const s of profileSubjects) {
-        const entry = studentData.find(r => r.month === m && r.subject_id === s.id);
-        if (entry) point[s.short] = entry.score;
-      }
-      return point;
-    });
-  }, [modeAllData, activeMonthsList, chartStudentId, profileSubjects]);
-
-  // Stacked bar chart data: subjects stacked by month for a student
-  const stackedChartData = useMemo(() => {
-    if (chartStudentId === "avg") {
-      // Average per subject per month across group
-      const months = activeMonthsList.map(m => m.value);
-      const subjectSums: Record<string, Record<number, { sum: number; count: number }>> = {};
-      for (const r of modeAllData) {
-        if (!subjectSums[r.month]) subjectSums[r.month] = {};
-        if (!subjectSums[r.month][r.subject_id]) subjectSums[r.month][r.subject_id] = { sum: 0, count: 0 };
-        subjectSums[r.month][r.subject_id].sum += r.score;
-        subjectSums[r.month][r.subject_id].count++;
-      }
-      const displaySubjects = activeDisplaySubjects;
-      return months.filter(m => subjectSums[m]).map(m => {
-        const point: Record<string, string | number> = { month: MONTH_SHORT[m] || m, monthFull: MONTH_LABELS[m] || m };
-        let total = 0;
-        for (const s of displaySubjects) {
-          const val = subjectSums[m]?.[s.id] ? Math.round(subjectSums[m][s.id].sum / subjectSums[m][s.id].count) : 0;
-          point[s.short] = val;
-          total += val;
-        }
-        point["╨Ш╤В╨╛╨│╨╛"] = total;
-        return point;
-      });
-    }
-    const sid = parseInt(chartStudentId);
-    const studentData = modeAllData.filter(r => r.student_id === sid);
-    const months = activeMonthsList.map(m => m.value).filter(m => studentData.some(r => r.month === m));
-    return months.map(m => {
-      const point: Record<string, string | number> = { month: MONTH_SHORT[m] || m, monthFull: MONTH_LABELS[m] || m };
-      let total = 0;
-      for (const s of profileSubjects) {
-        const entry = studentData.find(r => r.month === m && r.subject_id === s.id);
-        const val = entry ? entry.score : 0;
-        point[s.short] = val;
-        total += val;
-      }
-      point["╨Ш╤В╨╛╨│╨╛"] = total;
-      return point;
-    });
-  }, [modeAllData, activeMonthsList, chartStudentId, profileSubjects, isAllGroups]);
-
-  // Radar chart data: latest month subject breakdown
-  const radarData = useMemo(() => {
-    if (stackedChartData.length === 0) return [];
-    const latest = stackedChartData[stackedChartData.length - 1];
-    const displaySubjects = (chartStudentId === "avg" && isAllGroups) ? activeDisplaySubjects : profileSubjects;
-    return displaySubjects.map(s => ({
-      subject: s.short,
-      fullName: s.name,
-      score: (latest[s.short] as number) || 0,
-      max: s.max,
-      percent: Math.round(((latest[s.short] as number) || 0) / s.max * 100),
-    }));
-  }, [stackedChartData, profileSubjects, isAllGroups, chartStudentId]);
-
-  const chartStudentsList = useMemo(() => {
-    const names: Record<number, string> = {};
-    for (const r of modeAllData) names[r.student_id] = r.student_name;
-    return Object.entries(names).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [modeAllData]);
+  
 
   // ══════ TOPS / LEADERBOARD DATA ══════
 
@@ -1758,26 +1172,16 @@ export default function EntResultsPage() {
     });
   }, [modeAllData, activeMonthsList, isAllGroups, selectedMonth]);
 
-  const chartLines = useMemo(() => {
-    if (chartStudentId === "avg") return ["Средний балл"];
-    const student = chartStudentsList.find(s => s.id === chartStudentId);
-    return [student?.name || "Ученик", "Средний по группе"];
-  }, [chartStudentId, chartStudentsList]);
+  
 
   const handleSaveScores = useCallback(async (scores: { student_id: number; subject_id: number; score: number; month: string }[]) => {
     await saveEntResultsBatch(scores);
     const gid = selectedGroupId === "all" ? undefined : parseInt(selectedGroupId);
-    if (selectedGroupId && selectedMonth) { const data = await fetchEntResults(selectedMonth, gid); setRawData(data); }
-    const ad = await fetchEntResults(undefined, gid);
-    setAllData(ad);
   }, [selectedGroupId, selectedMonth]);
 
   const handleDeleteScores = useCallback(async (student_id: number, month: string) => {
     await deleteEntResults(student_id, month);
     const gid = selectedGroupId === "all" ? undefined : parseInt(selectedGroupId);
-    if (selectedGroupId && selectedMonth) { const data = await fetchEntResults(selectedMonth, gid); setRawData(data); }
-    const ad = await fetchEntResults(undefined, gid);
-    setAllData(ad);
   }, [selectedGroupId, selectedMonth]);
 
   return (
@@ -1789,7 +1193,7 @@ export default function EntResultsPage() {
           <TabsTrigger value="tops" className="data-[state=active]:bg-background data-[state=active]:shadow-sm"><Trophy className="h-4 w-4 mr-1.5" />Топы</TabsTrigger>
           <TabsTrigger value="subjects" className="data-[state=active]:bg-background data-[state=active]:shadow-sm"><BookOpen className="h-4 w-4 mr-1.5" />Предметы</TabsTrigger>
           <TabsTrigger value="progress" className="data-[state=active]:bg-background data-[state=active]:shadow-sm"><TrendingUp className="h-4 w-4 mr-1.5" />ЕНТ Результаты</TabsTrigger>
-          <TabsTrigger value="chart" className="data-[state=active]:bg-background data-[state=active]:shadow-sm"><BarChart3 className="h-4 w-4 mr-1.5" />Динамика</TabsTrigger>
+          <TabsTrigger value="analytics" className="data-[state=active]:bg-background data-[state=active]:shadow-sm"><BarChart3 className="h-4 w-4 mr-1.5" />Динамика</TabsTrigger>
         </TabsList>
 
         {/* 2. GLOBAL CONTROLS */}
@@ -1883,13 +1287,7 @@ export default function EntResultsPage() {
           onSuccess={async (savedExamType) => {
             setSelectedMonth(savedExamType);
             setDataMode("real");
-            const gid = selectedGroupId === "all" ? undefined : parseInt(selectedGroupId);
-            const [cur, all] = await Promise.all([
-              fetchEntResults(savedExamType, gid),
-              fetchEntResults(undefined, gid),
-            ]);
-            setRawData(cur);
-            setAllData(all);
+
           }}
         />
 
@@ -1902,343 +1300,35 @@ export default function EntResultsPage() {
           onSuccess={async (savedMonth, isReal) => {
             setSelectedMonth(savedMonth);
             setDataMode(isReal ? "real" : "training");
-            const gid = selectedGroupId === "all" ? undefined : parseInt(selectedGroupId);
-            const [cur, all] = await Promise.all([
-              fetchEntResults(savedMonth, gid),
-              fetchEntResults(undefined, gid),
-            ]);
-            setRawData(cur);
-            setAllData(all);
+
           }}
         />
 
         {/* TABS CONTENT */}
         {/* ══════ MATRIX TABLE TAB ══════ */}
         <TabsContent value="table" className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-          
-          {/* TABLE-SPECIFIC FILTERS & TOOLBAR */}
-          <div className="flex flex-wrap items-center gap-2 md:gap-3 mb-4">
-            {isAllGroups && (
-              <Select value={profileFilter} onValueChange={setProfileFilter}>
-                <SelectTrigger className="w-[180px]"><SelectValue placeholder="Направление" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Все направления</SelectItem>
-                  <SelectItem value="1">ФМ (Мат-Физ)</SelectItem>
-                  <SelectItem value="2">ХБ (Хим-Био)</SelectItem>
-                  <SelectItem value="3">ИНФМАТ (Инф-Мат)</SelectItem>
-                </SelectContent>
-              </Select>
-            )}
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-[140px]"><SelectValue placeholder="Статус" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Все ученики</SelectItem>
-                <SelectItem value="active">Активные</SelectItem>
-                <SelectItem value="archived">В архиве</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input placeholder="Поиск по имени..." value={search} onChange={e => setSearch(e.target.value)} className="w-full sm:max-w-[200px]" />
-            
-            <TooltipProvider delayDuration={300}>
-              <div className="flex items-center gap-1">
-                {isAdmin && (
-                  <>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setXlsxImportOpen(true)}>
-                          <Upload className="h-3.5 w-3.5" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Загрузить XLSX</TooltipContent>
-                    </Tooltip>
-                    {dataMode === "real" && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setRealEntImportOpen(true)}>
-                            <PenLine className="h-3.5 w-3.5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Ввести баллы реального ЕНТ (вручную / CSV)</TooltipContent>
-                      </Tooltip>
-                    )}
-                  </>
-                )}
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button variant={showFilters ? "default" : "outline"} size="icon" className="h-8 w-8 relative" onClick={() => setShowFilters(f => !f)}>
-                      <Filter className="h-3.5 w-3.5" />
-                      {(performanceFilter !== "all" || scoreRange[0] > 0 || scoreRange[1] < TOTAL_MAX || profileFilter !== "all") && (
-                        <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-destructive" />
-                      )}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    Фильтры{(performanceFilter !== "all" || scoreRange[0] > 0 || scoreRange[1] < TOTAL_MAX || profileFilter !== "all") ? " (активны)" : ""}
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-            </TooltipProvider>
-
-            {(performanceFilter !== "all" || scoreRange[0] > 0 || scoreRange[1] < TOTAL_MAX || profileFilter !== "all") && (
-              <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => { setPerformanceFilter("all"); setScoreRange([0, TOTAL_MAX]); setProfileFilter("all"); }}>
-                Сбросить фильтры
-              </Button>
-            )}
-          </div>
-
-          {/* Advanced filters panel */}
-          {showFilters && (
-            <Card className="mb-4">
-              <CardContent className="p-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label className="text-xs font-medium">Диапазон баллов: {scoreRange[0]} — {scoreRange[1]}</Label>
-                    <Slider min={0} max={TOTAL_MAX} step={5} value={scoreRange} onValueChange={v => setScoreRange(v as [number, number])} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs font-medium">Уровень</Label>
-                    <div className="flex flex-wrap gap-1.5">
-                      {[
-                        { val: "all", label: "Все", icon: null },
-                        { val: "high", label: "≥80%", icon: "🟢" },
-                        { val: "medium", label: "60-79%", icon: "🔵" },
-                        { val: "low", label: "40-59%", icon: "🟠" },
-                        { val: "critical", label: "<40%", icon: "🔴" },
-                      ].map(f => (
-                        <Button key={f.val} variant={performanceFilter === f.val ? "default" : "outline"} size="sm" className="text-xs h-7"
-                          onClick={() => setPerformanceFilter(f.val)}>
-                          {f.icon && <span className="mr-1">{f.icon}</span>}{f.label}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-4 gap-4">
-            <div className="flex items-center gap-3 bg-muted/30 p-1.5 rounded-lg border shadow-sm">
-              <span className={`text-sm font-medium px-2 ${!showMatrixSubjects ? 'text-primary' : 'text-muted-foreground'}`}>Общие баллы</span>
-              <Switch checked={showMatrixSubjects} onCheckedChange={setShowMatrixSubjects} />
-              <span className={`text-sm font-medium px-2 ${showMatrixSubjects ? 'text-primary' : 'text-muted-foreground'}`}>Все 5 предметов</span>
-            </div>
-            
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" className="h-9 shadow-sm bg-background" onClick={() => {
-                const emptyMonths = matrixMonths.filter(m => !monthsWithData.has(m));
-                setHiddenMatrixMonths(new Set(emptyMonths));
-              }}>
-                Скрыть пустые
-              </Button>
-              <Button variant="outline" size="sm" className="h-9 shadow-sm bg-background" onClick={() => setHiddenMatrixMonths(new Set())}>
-                Показать все
-              </Button>
-              <Popover>
-                <PopoverTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9 shadow-sm bg-background">
-                  Выбрать месяцы
-                  <ChevronDown className="ml-2 h-4 w-4" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-64 p-0 shadow-xl" align="end">
-                <div className="p-2 bg-muted/50 border-b">
-                  <h4 className="text-xs font-semibold uppercase text-muted-foreground tracking-wider px-2">Колонки</h4>
-                </div>
-                <div className="p-2 space-y-1 max-h-[300px] overflow-auto">
-                  {matrixMonths.map(m => (
-                    <label key={m} className="flex items-center gap-2.5 p-2 hover:bg-muted rounded-md cursor-pointer text-sm transition-colors">
-                      <Checkbox 
-                        checked={!hiddenMatrixMonths.has(m)}
-                        onCheckedChange={(checked) => {
-                          setHiddenMatrixMonths(prev => {
-                            const next = new Set(prev);
-                            if (checked) next.delete(m);
-                            else next.add(m);
-                            return next;
-                          });
-                        }}
-                      />
-                      <span className="font-medium">{MONTH_LABELS[m] || m}</span>
-                    </label>
-                  ))}
-                </div>
-              </PopoverContent>
-            </Popover>
-            </div>
-          </div>
-
-          {loading ? (
-            <div className="space-y-2">{[1, 2, 3, 4, 5, 6].map(i => <Skeleton key={i} className="h-10 rounded-lg w-full" />)}</div>
-          ) : matrixData.length === 0 ? (
-            <Card className="text-center py-16 bg-muted/10"><CardContent>
-              <BarChart3 className="h-12 w-12 mx-auto text-muted-foreground/20 mb-3" />
-              <p className="text-muted-foreground font-medium">Нет данных для отображения</p>
-              <p className="text-xs text-muted-foreground/60 mt-1">Попробуйте изменить группу или фильтры</p>
-            </CardContent></Card>
-          ) : (
-            <div className="rounded-xl border overflow-auto bg-card shadow-sm custom-scrollbar" style={{ maxHeight: "calc(100vh - 240px)" }}>
-              <table className="w-full text-sm text-left border-collapse min-w-max">
-                <thead className="bg-muted/80 text-muted-foreground text-xs uppercase sticky top-0 z-20 shadow-sm backdrop-blur-md">
-                  <tr>
-                    <th 
-                      className="px-4 py-3 font-semibold border-b border-r bg-muted/90 sticky left-0 z-30 min-w-[240px] backdrop-blur-md cursor-pointer hover:bg-muted"
-                      onClick={() => {
-                        if (matrixSortCol === "name") setMatrixSortDir(d => d === "asc" ? "desc" : "asc");
-                        else { setMatrixSortCol("name"); setMatrixSortDir("asc"); }
-                      }}
-                    >
-                      <div className="flex items-center gap-1.5">
-                        Ученик / Группа 
-                        {matrixSortCol === "name" && (matrixSortDir === "asc" ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />)}
-                        {matrixSortCol !== "name" && <ChevronsUpDown className="h-3.5 w-3.5 opacity-30" />}
-                      </div>
-                    </th>
-                    {matrixMonths.filter(m => !hiddenMatrixMonths.has(m)).map(m => (
-                      <th key={m} colSpan={showMatrixSubjects ? 7 : 2} className="px-2 py-2 font-bold border-b border-r text-center tracking-wider text-primary">
-                        {MONTH_LABELS[m] || m}
-                      </th>
-                    ))}
-                  </tr>
-                  {showMatrixSubjects && (
-                    <tr className="bg-muted/40 backdrop-blur-md">
-                      <th className="px-4 py-1.5 border-b border-r sticky left-0 bg-muted/80 z-30"></th>
-                      {matrixMonths.filter(m => !hiddenMatrixMonths.has(m)).map(m => (
-                        <Fragment key={m + "_subs"}>
-                          <th className="px-1.5 py-1.5 font-medium border-b border-r text-center w-12 text-[10px]">Ист</th>
-                          <th className="px-1.5 py-1.5 font-medium border-b border-r text-center w-12 text-[10px]">Чт</th>
-                          <th className="px-1.5 py-1.5 font-medium border-b border-r text-center w-12 text-[10px]">МГ</th>
-                          <th className="px-1.5 py-1.5 font-medium border-b border-r text-center w-12 text-[10px]">П1</th>
-                          <th className="px-1.5 py-1.5 font-medium border-b border-r text-center w-12 text-[10px]">П2</th>
-                          <th 
-                            className="px-2 py-1.5 font-bold border-b border-r text-center text-primary w-14 text-[10px] cursor-pointer hover:bg-muted/60"
-                            onClick={() => {
-                              if (matrixSortCol === m) setMatrixSortDir(d => d === "asc" ? "desc" : "asc");
-                              else { setMatrixSortCol(m); setMatrixSortDir("desc"); }
-                            }}
-                          >
-                            <div className="flex items-center justify-center gap-0.5">
-                              Общ 
-                              {matrixSortCol === m && (matrixSortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
-                              {matrixSortCol !== m && <ChevronsUpDown className="h-3 w-3 opacity-30" />}
-                            </div>
-                          </th>
-                          <th className="px-1.5 py-1.5 font-medium border-b border-r text-center w-14 text-[10px]">Прог</th>
-                        </Fragment>
-                      ))}
-                    </tr>
-                  )}
-                  {!showMatrixSubjects && (
-                    <tr className="bg-muted/40 backdrop-blur-md">
-                      <th className="px-4 py-1.5 border-b border-r sticky left-0 bg-muted/80 z-30"></th>
-                      {matrixMonths.filter(m => !hiddenMatrixMonths.has(m)).map(m => (
-                        <Fragment key={m + "_subs"}>
-                          <th 
-                            className="px-2 py-1.5 font-bold border-b border-r text-center text-primary w-16 text-[10px] cursor-pointer hover:bg-muted/60"
-                            onClick={() => {
-                              if (matrixSortCol === m) setMatrixSortDir(d => d === "asc" ? "desc" : "asc");
-                              else { setMatrixSortCol(m); setMatrixSortDir("desc"); }
-                            }}
-                          >
-                            <div className="flex items-center justify-center gap-0.5">
-                              Общ 
-                              {matrixSortCol === m && (matrixSortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
-                              {matrixSortCol !== m && <ChevronsUpDown className="h-3 w-3 opacity-30" />}
-                            </div>
-                          </th>
-                          <th className="px-2 py-1.5 font-medium border-b border-r text-center w-16 text-[10px]">Прог</th>
-                        </Fragment>
-                      ))}
-                    </tr>
-                  )}
-                </thead>
-                <tbody className="divide-y divide-border/50">
-                  {matrixData.map(st => {
-                    const rowProfileId = groupProfileMap[st.group_id] || 1;
-                    const subs = ENT_PROFILE_SUBJECTS[rowProfileId] || ENT_PROFILE_SUBJECTS[1];
-                    const grp = groups.find(g => g.id === st.group_id);
-                    const gname = grp?.name || "Без группы";
-                    
-                    return (
-                      <tr key={st.id} className={`hover:bg-muted/30 transition-colors group ${getGroupRowColor(st.group_id)}`}>
-                        <td className="px-4 py-2.5 border-r bg-background group-hover:bg-muted/30 sticky left-0 z-10 transition-colors">
-                          <div className="flex items-center gap-2.5">
-                            <div className="shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/10 flex items-center justify-center">
-                              <span className="text-xs font-bold text-primary">{st.name.split(' ').map((w: string) => w[0]).join('').slice(0,2).toUpperCase()}</span>
-                            </div>
-                            <div className="min-w-0">
-                              <div className="font-semibold text-foreground text-[13px] truncate">{st.name}</div>
-                              <div className="flex items-center gap-1 mt-0.5">
-                                <GroupPersonAvatar groupName={gname} avatarUrl={grp?.avatar_url} size={12} showTooltip={false} />
-                                <span className="text-[10px] text-muted-foreground font-medium truncate">{gname}</span>
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                        {matrixMonths.filter(m => !hiddenMatrixMonths.has(m)).map(m => {
-                          const mData = st.scoresByMonth[m];
-                          if (!mData) {
-                            return showMatrixSubjects ? (
-                              <Fragment key={m}>
-                                <td colSpan={5} className="px-1.5 py-1.5 border-r text-center text-muted-foreground/30 text-xs bg-muted/5">—</td>
-                                <td 
-                                  className={`px-2 py-1.5 border-r text-center font-bold text-muted-foreground/30 bg-muted/10 ${isAdmin ? 'cursor-pointer hover:bg-muted/50 hover:text-primary transition-colors' : ''}`}
-                                  onClick={() => isAdmin && setEditStudent({ id: st.id, full_name: st.name, month: m })}
-                                >
-                                  Добавить
-                                </td>
-                                <td className="px-1.5 py-1.5 border-r text-center text-muted-foreground/30 text-[10px] bg-muted/5">-</td>
-                              </Fragment>
-                            ) : (
-                              <Fragment key={m}>
-                                <td 
-                                  className={`px-2 py-2 border-r text-center font-bold text-muted-foreground/30 bg-muted/10 ${isAdmin ? 'cursor-pointer hover:bg-muted/50 hover:text-primary transition-colors' : ''}`}
-                                  onClick={() => isAdmin && setEditStudent({ id: st.id, full_name: st.name, month: m })}
-                                >
-                                  Добавить
-                                </td>
-                                <td className="px-2 py-2 border-r text-center text-muted-foreground/30 text-[10px] bg-muted/5">-</td>
-                              </Fragment>
-                            );
-                          }
-
-                          const renderScore = (idx: number) => {
-                            const s = subs[idx];
-                            if (!s) return <td className="px-1.5 py-1.5 border-r text-center text-muted-foreground/30 text-xs">—</td>;
-                            const score = mData.scores[s.id];
-                            return <td className={`px-1.5 py-1.5 border-r text-center text-xs ${getMatrixCellBg(score, s.max)}`}>{score != null ? score : "—"}</td>;
-                          };
-
-                          return (
-                            <Fragment key={m}>
-                              {showMatrixSubjects && (
-                                <>
-                                  {renderScore(0)}
-                                  {renderScore(1)}
-                                  {renderScore(2)}
-                                  {renderScore(3)}
-                                  {renderScore(4)}
-                                </>
-                              )}
-                              <td 
-                                className={`px-2 py-1.5 border-r text-center font-bold bg-muted/20 text-foreground text-sm ${isAdmin ? 'cursor-pointer hover:bg-muted/50 hover:text-primary transition-colors' : ''}`}
-                                onClick={() => isAdmin && setEditStudent({ id: st.id, full_name: st.name, month: m })}
-                              >
-                                {mData.total > 0 ? mData.total : "—"}
-                              </td>
-                              <td className="px-1.5 py-1.5 border-r text-center bg-muted/5">
-                                {mData.progress != null ? <DeltaBadge delta={mData.progress} /> : "-"}
-                              </td>
-                            </Fragment>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <EntMatrixTab
+            allData={allData}
+            search={search}
+            setSearch={setSearch}
+            profileFilter={profileFilter}
+            setProfileFilter={setProfileFilter}
+            isAllGroups={isAllGroups}
+            groupProfileMap={groupProfileMap}
+            scoreRange={scoreRange}
+            setScoreRange={setScoreRange}
+            performanceFilter={performanceFilter}
+            setPerformanceFilter={setPerformanceFilter}
+            statusFilter={statusFilter}
+            setStatusFilter={setStatusFilter}
+            groups={groups}
+            isAdmin={isAdmin}
+            dataMode={dataMode}
+            setXlsxImportOpen={setXlsxImportOpen}
+            setRealEntImportOpen={setRealEntImportOpen}
+            setEditStudent={setEditStudent}
+            loading={loading}
+          />
         </TabsContent>
 
         {/* ══════ TOPS / LEADERBOARD TAB ══════ */}
@@ -2740,146 +1830,15 @@ export default function EntResultsPage() {
           )}
         </TabsContent>
 
-        {/* ══════ CHART TAB ══════ */}
-        <TabsContent value="chart">
-          <div className="flex flex-wrap items-end gap-3 mb-5">
-            <div className="space-y-1">
-              <Label className="text-xs">Ученик</Label>
-              <Select value={chartStudentId} onValueChange={setChartStudentId}>
-                <SelectTrigger className="w-[240px]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="avg">📊 Среднее по группе</SelectItem>
-                  {chartStudentsList.map(s => (<SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {stackedChartData.length === 0 ? (
-            <Card className="text-center py-16"><CardContent>
-              <TrendingUp className="h-12 w-12 mx-auto text-muted-foreground/20 mb-3" />
-              <p className="text-muted-foreground">Нет данных для графика</p>
-            </CardContent></Card>
-          ) : (
-            <>
-              {/* Stacked bar chart: subjects breakdown by month */}
-              <Card className="mb-5">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium">
-                    Баллы по предметам · {chartStudentId === "avg" ? "Среднее по группе" : chartStudentsList.find(s => s.id === chartStudentId)?.name}
-                  </CardTitle>
-                  <p className="text-xs text-muted-foreground">Каждый столбец показывает вклад предмета в общий балл</p>
-                </CardHeader>
-                <CardContent>
-                  <ResponsiveContainer width="100%" height={350}>
-                    <BarChart data={stackedChartData} margin={{ top: 20, right: 20, left: 0, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                      <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                      <YAxis domain={[0, TOTAL_MAX]} tick={{ fontSize: 12 }} />
-                      <Tooltip
-                        contentStyle={{ fontSize: 13, borderRadius: 8 }}
-                        labelFormatter={label => { const pt = stackedChartData.find((d: any) => d.month === label) as any; return pt?.monthFull || label; }}
-                        formatter={(value: number, name: string) => [value, name]}
-                      />
-                      <Legend />
-                      {((chartStudentId === "avg" && isAllGroups) ? MANDATORY_SUBJECTS : profileSubjects).map((s, i) => (
-                        <Bar key={s.id} dataKey={s.short} name={s.name} stackId="total"
-                          fill={CHART_COLORS[i % CHART_COLORS.length]} radius={i === ((chartStudentId === "avg" && isAllGroups) ? MANDATORY_SUBJECTS : profileSubjects).length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}>
-                          {i === ((chartStudentId === "avg" && isAllGroups) ? MANDATORY_SUBJECTS : profileSubjects).length - 1 && (
-                            <LabelList dataKey="Итого" position="top" fontSize={11} fontWeight={700} fill="#6366f1" />
-                          )}
-                        </Bar>
-                      ))}
-                    </BarChart>
-                  </ResponsiveContainer>
-                </CardContent>
-              </Card>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                {/* Radar chart: latest month subject breakdown */}
-                {radarData.length > 0 && (
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm font-medium">Профиль предметов (последний месяц)</CardTitle>
-                      <p className="text-xs text-muted-foreground">Процент от максимума по каждому предмету</p>
-                    </CardHeader>
-                    <CardContent>
-                      <ResponsiveContainer width="100%" height={300}>
-                        <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="75%">
-                          <PolarGrid stroke="hsl(var(--border))" />
-                          <PolarAngleAxis dataKey="subject" tick={{ fontSize: 12, fontWeight: 600 }} />
-                          <PolarRadiusAxis domain={[0, 100]} tick={{ fontSize: 10 }} angle={90} />
-                          <Tooltip
-                            contentStyle={{ fontSize: 13, borderRadius: 8 }}
-                            formatter={(value: number, _name: string, props: any) => [`${props.payload.score}/${props.payload.max} (${value}%)`, props.payload.fullName]}
-                          />
-                          <Radar dataKey="percent" stroke="#6366f1" fill="#6366f1" fillOpacity={0.25} strokeWidth={2} dot={{ r: 4, fill: "#6366f1" }} />
-                        </RadarChart>
-                      </ResponsiveContainer>
-                    </CardContent>
-                  </Card>
-                )}
-
-                {/* Total score trend line */}
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">Динамика общего балла</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <AreaChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                        <defs>
-                          <linearGradient id="colorTotal" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                            <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                          </linearGradient>
-                          <linearGradient id="colorAvg" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.2} />
-                            <stop offset="95%" stopColor="#94a3b8" stopOpacity={0} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                        <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                        <YAxis domain={[0, TOTAL_MAX]} tick={{ fontSize: 12 }} />
-                        <RechartsTooltip contentStyle={{ fontSize: 13, borderRadius: 8 }}
-                          labelFormatter={label => { const pt = chartData.find((d: any) => d.month === label) as any; return pt?.monthFull || label; }} />
-                        <Legend />
-                        {chartLines.map((name, i) => (
-                          <Area key={name} type="monotone" dataKey={name}
-                            stroke={i === 0 ? "#6366f1" : "#94a3b8"} strokeWidth={i === 0 ? 3 : 1.5}
-                            fill={i === 0 ? "url(#colorTotal)" : "url(#colorAvg)"}
-                            dot={{ r: i === 0 ? 5 : 3, fill: i === 0 ? "#6366f1" : "#94a3b8" }} connectNulls />
-                        ))}
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Per-subject line chart for individual student */}
-              {chartStudentId !== "avg" && subjectChartData.length > 0 && (
-                <Card className="mt-5">
-                  <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">Динамика по предметам</CardTitle></CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={280}>
-                      <LineChart data={subjectChartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                        <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                        <YAxis domain={[0, 50]} tick={{ fontSize: 12 }} />
-                        <RechartsTooltip contentStyle={{ fontSize: 13, borderRadius: 8 }} />
-                        <Legend />
-                        {profileSubjects.map((s, i) => (
-                          <Line key={s.id} type="monotone" dataKey={s.short} name={`${s.name} (/${s.max})`}
-                            stroke={CHART_COLORS[i % CHART_COLORS.length]} strokeWidth={2.5}
-                            dot={{ r: 4, fill: CHART_COLORS[i % CHART_COLORS.length] }} connectNulls />
-                        ))}
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              )}
-            </>
-          )}
+        {/* ══════ ANALYTICS TAB ══════ */}
+        <TabsContent value="analytics">
+          <EntAnalyticsTab 
+            modeAllData={modeAllData}
+            activeMonthsList={activeMonthsList}
+            profileSubjects={profileSubjects}
+            isAllGroups={isAllGroups}
+            activeDisplaySubjects={activeDisplaySubjects}
+          />
         </TabsContent>
       </Tabs>
     </div>
